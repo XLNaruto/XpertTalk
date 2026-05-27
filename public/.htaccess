@@ -1,0 +1,65 @@
+ RewriteEngine on
+
+# Don't rewrite files or directories
+RewriteCond %{REQUEST_FILENAME} -f [OR]  
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Rewrite everything else to index.html to allow html5 state links
+RewriteRule ^ index.html [L]  
+
+
+# Enable Gzip Compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/plain text/xml text/css text/javascript application/javascript application/x-javascript application/json application/xml application/xhtml+xml application/rss+xml application/x-font-ttf application/x-font-opentype application/vnd.ms-fontobject image/svg+xml
+
+    # Exclude already compressed files
+    SetEnvIfNoCase Request_URI \.(?:gif|jpg|jpeg|png|webp|svg|ico|woff|woff2|eot|ttf|otf|mp4|avi|mov|zip|gz|bz2|rar|7z)$ no-gzip dont-vary
+
+    # Enable vary header for proxies and caches
+    Header append Vary: Accept-Encoding
+</IfModule>
+
+# Enable Browser Caching (Exclude HTML)
+<IfModule mod_expires.c>
+    ExpiresActive On
+
+    # Do NOT cache HTML files
+    ExpiresByType text/html "access plus 0 seconds"
+
+    # Cache CSS and JavaScript for 1 month
+    ExpiresByType text/css "access plus 1 month"
+    ExpiresByType text/javascript "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType application/x-javascript "access plus 1 month"
+
+    # Cache Images for 1 year
+    ExpiresByType image/jpeg "access plus 1 year"
+    ExpiresByType image/png "access plus 1 year"
+    ExpiresByType image/gif "access plus 1 year"
+    ExpiresByType image/webp "access plus 1 year"
+    ExpiresByType image/svg+xml "access plus 1 year"
+    ExpiresByType image/x-icon "access plus 1 year"
+
+    # Cache Fonts for 1 year
+    ExpiresByType application/x-font-ttf "access plus 1 year"
+    ExpiresByType application/x-font-opentype "access plus 1 year"
+    ExpiresByType application/vnd.ms-fontobject "access plus 1 year"
+    ExpiresByType font/woff "access plus 1 year"
+    ExpiresByType font/woff2 "access plus 1 year"
+
+    # Cache Video and Audio files for 1 year
+    ExpiresByType video/mp4 "access plus 1 year"
+    ExpiresByType audio/mpeg "access plus 1 year"
+</IfModule>
+
+# Leverage Browser Caching via Cache-Control Headers (Exclude HTML)
+<IfModule mod_headers.c>
+    <FilesMatch "\.(css|js|jpg|jpeg|png|gif|webp|svg|ico|woff|woff2|eot|ttf|otf|mp4|mp3)$">
+        Header set Cache-Control "public, max-age=31536000"
+    </FilesMatch>
+
+    # Remove old cache headers for static files
+    Header unset Pragma
+    Header unset Expires
+</IfModule>

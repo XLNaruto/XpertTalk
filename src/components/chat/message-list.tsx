@@ -1,0 +1,724 @@
+import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { useMessageCacheStore } from "@/stores/message-cache-store";
+import { getEncodedCookie } from "@/lib/encryption";
+import { cn } from "@/lib/utils";
+
+import { Loader2 } from "lucide-react";
+import MessageBubble from "@/components/chat/message-bubble";
+import MediaGrid from "@/components/chat/media-grid";
+import { MessageListSkeleton } from "@/components/chat/message-list-skeleton";
+import { ScrollToBottom } from "@/components/chat/scroll-to-bottom";
+
+export interface MessageListHandle {
+  scrollToBottom: () => void;
+  scrollToMessage: (messageId: string) => void;
+  markAllAsRead: () => void;
+}
+
+interface MessageListProps {
+  talkId: string;
+  hoveredId: string | null;
+  onHover: (id: string | null) => void;
+  onReply: (msg: any) => void;
+  onEdit: (msg: any) => void;
+  onDelete: (id: string) => void;
+  onDeleteAll: (ids: string[]) => void;
+  onSelect: (msg: any) => void;
+  onSelectMultiple: (msgs: any[]) => void;
+  onEnterSelectionMode: (msg: any) => void;
+  onEnterSelectionModeMultiple: (msgs: any[]) => void;
+  onForward: (msg: any) => void;
+  onForwardMultiple: (msgs: any[]) => void;
+  onMediaClick: (path: string, type: "image" | "video") => void;
+  isSelectionMode: boolean;
+  selectedMessages: any[];
+  readMessagesApi: (messageId: string, created: string, talkId: string) => void;
+  onToggleReaction: (messageId: string, reaction: string) => void;
+  onTogglePin: (messageId: string) => void;
+}
+
+// ── Media group detection ──
+// Groups consecutive IMAGE/VIDEO messages from the same sender within 1 minute
+function computeMediaGroups(messages: any[]): Map<string, { messages: any[]; isFirst: boolean }> {
+  const groups = new Map<string, { messages: any[]; isFirst: boolean }>();
+  let currentGroup: any[] = [];
+
+  const flush = () => {
+    if (currentGroup.length > 1) {
+      const groupMsgs = [...currentGroup];
+      groupMsgs.forEach((msg, i) => {
+        groups.set(msg.messageId, { messages: groupMsgs, isFirst: i === 0 });
+      });
+    }
+    currentGroup = [];
+  };
+
+  for (const msg of messages) {
+    if (msg.type !== "message") { flush(); continue; }
+
+    const isMedia =
+      (msg.messageType === "IMAGE" || msg.messageType === "VIDEO") &&
+      msg.mediaPath &&
+      !msg.replyToMessageId &&
+      !msg.forwardFromMessageId;
+
+    if (!isMedia) { flush(); continue; }
+
+    if (currentGroup.length === 0) {
+      currentGroup.push(msg);
+      continue;
+    }
+
+    const prev = currentGroup[currentGroup.length - 1];
+    const timeDiff = Math.abs(
+      new Date(msg.created).getTime() - new Date(prev.created).getTime()
+    );
+    const sameSender = msg.senderChatuserId === prev.senderChatuserId;
+
+    if (sameSender && timeDiff <= 60000) {
+      currentGroup.push(msg);
+    } else {
+      flush();
+      currentGroup.push(msg);
+    }
+  }
+  flush();
+
+  return groups;
+}
+
+export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(function MessageList({
+  talkId,
+  hoveredId,
+  onHover,
+  onReply,
+  onEdit,
+  onDelete,
+  onDeleteAll,
+  onSelect,
+  onSelectMultiple,
+  onEnterSelectionMode,
+  onEnterSelectionModeMultiple,
+  onForward,
+  onForwardMultiple,
+  onMediaClick,
+  isSelectionMode,
+  selectedMessages,
+  readMessagesApi,
+  onToggleReaction,
+  onTogglePin,
+}, ref) {
+  const chatuserId = getEncodedCookie("chatuserId") || "";
+
+  const messages = useMessageCacheStore((s) => s.messages);
+  const formattedMessages = useMessageCacheStore((s) => s.formattedMessages);
+  const isLoading = useMessageCacheStore((s) => s.isLoading);
+  const isMsgApiCall = useMessageCacheStore((s) => s.isMsgApiCall);
+  const hasMoreOlder = useMessageCacheStore((s) => s.hasMoreOlder);
+  const hasMoreNewer = useMessageCacheStore((s) => s.hasMoreNewer);
+  const firstItemIndex = useMessageCacheStore((s) => s.firstItemIndex);
+  const getMessagesList = useMessageCacheStore((s) => s.getMessagesList);
+  const dispatchMessage = useMessageCacheStore((s) => s.dispatchMessage);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+
+  // Compute media groups for grid rendering
+  const mediaGroups = useMemo(
+    () => computeMediaGroups(formattedMessages),
+    [formattedMessages]
+  );
+  const [readMessages, setReadMessages] = useState<Set<string>>(new Set());
+  const [unreadBelowCount, setUnreadBelowCount] = useState(0);
+  const lastVisibleRangeRef = useRef<{
+    startIndex: number;
+    endIndex: number;
+  } | null>(null);
+  const markedAsReadRef = useRef<Set<string>>(new Set());
+
+  // Suppress followOutput auto-scroll when positioned at unreads
+  const suppressFollowRef = useRef(false);
+  // Track whether initial unread positioning has been done for this talkId
+  const initialPositionDoneRef = useRef(false);
+  // Gate read-marking until Virtuoso has finished initial scroll positioning.
+  // Without this, rangeChanged fires for intermediate positions during Virtuoso's
+  // alignToBottom → initialTopMostItemIndex settling, marking messages as read prematurely.
+  const readyToMarkRef = useRef(false);
+  const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Capture initial unread index ONCE per talkId when messages first load
+  const initialUnreadRef = useRef<number | null>(null);
+  const prevTalkIdRef = useRef(talkId);
+  const allReadBottomRef = useRef(false);
+
+  if (prevTalkIdRef.current !== talkId) {
+    // Reset when switching chats
+    initialUnreadRef.current = null;
+    prevTalkIdRef.current = talkId;
+    initialPositionDoneRef.current = false;
+    suppressFollowRef.current = false;
+    allReadBottomRef.current = false;
+    readyToMarkRef.current = false;
+    if (readyTimerRef.current) clearTimeout(readyTimerRef.current);
+  }
+
+  if (initialUnreadRef.current === null && formattedMessages.length > 0) {
+    const idx = formattedMessages.findIndex(
+      (msg: any) =>
+        msg.type === "message" &&
+        msg.unread === 1 &&
+        String(msg.senderChatuserId) !== String(chatuserId)
+    );
+    initialUnreadRef.current = idx >= 0 ? idx : formattedMessages.length - 1;
+    // If there are unreads, suppress followOutput until user scrolls to bottom
+    if (idx >= 0) {
+      initialPositionDoneRef.current = true;
+      suppressFollowRef.current = true;
+    } else {
+      allReadBottomRef.current = true;
+    }
+  }
+
+  const firstUnreadIndex = initialUnreadRef.current ?? formattedMessages.length - 1;
+
+  // Eagerly suppress followOutput during render when background sync adds unreads
+  // (prevents auto-scroll to bottom before the repositioning useEffect can fire)
+  if (!initialPositionDoneRef.current && formattedMessages.length > 0) {
+    const hasUnreads = formattedMessages.some(
+      (msg: any) =>
+        msg.type === "message" &&
+        msg.unread === 1 &&
+        String(msg.senderChatuserId) !== String(chatuserId)
+    );
+    if (hasUnreads) {
+      suppressFollowRef.current = true;
+    }
+  }
+
+  // Reset local read-tracking state when switching chats
+  useEffect(() => {
+    setReadMessages(new Set());
+    markedAsReadRef.current = new Set();
+    setUnreadBelowCount(0);
+  }, [talkId]);
+
+  // Keep a ref to the latest handleRangeChanged so the settling timer can call it
+  const handleRangeChangedRef = useRef<((range: { startIndex: number; endIndex: number }) => void) | null>(null);
+
+  // Reposition to first unread after background sync adds new unread messages
+  // (handles the case where cached messages had no unreads but sync fetches new ones)
+  useEffect(() => {
+    if (initialPositionDoneRef.current) return;
+    if (formattedMessages.length === 0) return;
+
+    const idx = formattedMessages.findIndex(
+      (msg: any) =>
+        msg.type === "message" &&
+        msg.unread === 1 &&
+        String(msg.senderChatuserId) !== String(chatuserId)
+    );
+
+    if (idx >= 0) {
+      allReadBottomRef.current = false;
+      initialPositionDoneRef.current = true;
+      initialUnreadRef.current = idx;
+      suppressFollowRef.current = true;
+      setForceScrollIndex(idx);
+      setVirtuosoKey((k) => k + 1);
+      setTimeout(() => setForceScrollIndex(null), 500);
+    }
+  }, [formattedMessages, chatuserId]);
+
+  // Keep scroll at bottom for "all read" chats after background sync grows the list
+  useEffect(() => {
+    if (!allReadBottomRef.current) return;
+    if (formattedMessages.length === 0) return;
+    const lastIndex = formattedMessages.length - 1;
+    if (
+      initialUnreadRef.current !== null &&
+      initialUnreadRef.current < lastIndex
+    ) {
+      initialUnreadRef.current = lastIndex;
+      const timer = setTimeout(() => {
+        virtuosoRef.current?.scrollToIndex({
+          index: "LAST",
+          align: "end",
+          behavior: "auto",
+        });
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [formattedMessages]);
+
+  // Live unread index for unread label rendering
+  const liveFirstUnreadIndex = useMemo(() => {
+    const idx = formattedMessages.findIndex(
+      (msg: any) =>
+        msg.type === "message" &&
+        msg.unread === 1 &&
+        !readMessages.has(msg.messageId) &&
+        String(msg.senderChatuserId) !== String(chatuserId)
+    );
+    return idx >= 0 ? idx : -1;
+  }, [formattedMessages, readMessages, chatuserId]);
+
+  const markAsRead = useCallback(
+    (messageId: string, created: string) => {
+      if (markedAsReadRef.current.has(messageId)) return;
+      markedAsReadRef.current.add(messageId);
+      readMessagesApi(messageId, created, talkId);
+      // Update store immediately so msg.unread becomes 0 — keeps
+      // unreadBelowCount (scroll button) in sync with sidebar count
+      dispatchMessage({
+        type: "UPDATE_READ_STATUS",
+        payload: { messageId },
+      });
+      setReadMessages((prev) => new Set(prev).add(messageId));
+    },
+    [readMessagesApi, talkId, dispatchMessage]
+  );
+
+  const handleRangeChanged = useCallback(
+    ({ startIndex, endIndex }: { startIndex: number; endIndex: number }) => {
+      lastVisibleRangeRef.current = { startIndex, endIndex };
+      let latestUnreadBelow = 0;
+
+      // Always count unreads below for the scroll-to-bottom badge,
+      // but only mark messages as read AFTER Virtuoso has settled.
+      // During initial mount, Virtuoso fires rangeChanged for intermediate
+      // positions (alignToBottom → initialTopMostItemIndex) which would
+      // prematurely mark messages as read.
+      if (readyToMarkRef.current) {
+        // Find the LAST unread message in the visible range.
+        // Server marks everything up to the given messageId as read,
+        // so we only need to emit markRead once for the last one.
+        let lastVisibleUnread: { messageId: string; created: string } | null = null;
+
+        for (let i = startIndex; i <= endIndex; i++) {
+          const adjustedIndex = i - firstItemIndex;
+          const msg = formattedMessages[adjustedIndex];
+          if (!msg || msg.type !== "message") continue;
+          if (String(msg.senderChatuserId) === String(chatuserId)) continue;
+
+          // Skip non-first items in a media group — they render as 1px hidden divs
+          // and aren't truly visible to the user
+          const groupInfo = mediaGroups.get(msg.messageId);
+          if (groupInfo && !groupInfo.isFirst) continue;
+
+          // If this is the first item of a media group, check ALL group messages
+          if (groupInfo && groupInfo.isFirst) {
+            for (const gMsg of groupInfo.messages) {
+              if (
+                gMsg.unread === 1 &&
+                !readMessages.has(gMsg.messageId) &&
+                String(gMsg.senderChatuserId) !== String(chatuserId)
+              ) {
+                lastVisibleUnread = { messageId: gMsg.messageId, created: gMsg.created };
+              }
+            }
+            continue;
+          }
+
+          // Normal (non-grouped) message
+          if (msg.unread === 1 && !readMessages.has(msg.messageId)) {
+            lastVisibleUnread = { messageId: msg.messageId, created: msg.created };
+          }
+        }
+
+        // Emit a single markRead for the last visible unread — server marks all prior as read
+        if (lastVisibleUnread && !markedAsReadRef.current.has(lastVisibleUnread.messageId)) {
+          markAsRead(lastVisibleUnread.messageId, lastVisibleUnread.created);
+        }
+      }
+
+      const adjustedEnd = endIndex - firstItemIndex;
+      for (let i = adjustedEnd + 1; i < formattedMessages.length; i++) {
+        const msg = formattedMessages[i];
+        if (
+          msg?.type === "message" &&
+          msg.unread === 1 &&
+          !readMessages.has(msg.messageId) &&
+          String(msg.senderChatuserId) !== String(chatuserId)
+        ) {
+          latestUnreadBelow++;
+        }
+      }
+      setUnreadBelowCount(latestUnreadBelow);
+    },
+    [formattedMessages, firstItemIndex, readMessages, chatuserId, markAsRead, mediaGroups]
+  );
+
+  // Keep ref in sync so the settling timer can call the latest version
+  handleRangeChangedRef.current = handleRangeChanged;
+
+  const scrollToBottom = useCallback(() => {
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end" });
+  }, []);
+
+  // Mark ALL unread messages as read (used when user sends a message)
+  const markAllAsRead = useCallback(() => {
+    let lastUnreadMsg: any = null;
+    const newRead = new Set(readMessages);
+
+    for (const msg of formattedMessages) {
+      if (
+        msg.type === "message" &&
+        msg.unread === 1 &&
+        String(msg.senderChatuserId) !== String(chatuserId)
+      ) {
+        newRead.add(msg.messageId);
+        markedAsReadRef.current.add(msg.messageId);
+        lastUnreadMsg = msg;
+      }
+    }
+
+    // Emit markRead for the last unread — server marks all prior messages as read too
+    if (lastUnreadMsg) {
+      readMessagesApi(lastUnreadMsg.messageId, lastUnreadMsg.created, talkId);
+    }
+
+    setReadMessages(newRead);
+    setUnreadBelowCount(0);
+    suppressFollowRef.current = false;
+  }, [formattedMessages, readMessages, chatuserId, readMessagesApi, talkId]);
+
+
+
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
+  const [forceScrollIndex, setForceScrollIndex] = useState<number | null>(null);
+  const [virtuosoKey, setVirtuosoKey] = useState(0);
+
+  // After Virtuoso settles (talkId change or remount), enable read-marking
+  // and trigger it for the current visible range
+  useEffect(() => {
+    readyToMarkRef.current = false;
+    if (readyTimerRef.current) clearTimeout(readyTimerRef.current);
+    readyTimerRef.current = setTimeout(() => {
+      readyToMarkRef.current = true;
+      // Trigger marking for the settled visible range
+      if (lastVisibleRangeRef.current && handleRangeChangedRef.current) {
+        handleRangeChangedRef.current(lastVisibleRangeRef.current);
+      }
+    }, 600);
+    return () => {
+      if (readyTimerRef.current) clearTimeout(readyTimerRef.current);
+    };
+  }, [talkId, virtuosoKey]);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollSearchRef = useRef(false);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const highlightMessage = useCallback((messageId: string) => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlightedId(messageId);
+    highlightTimerRef.current = setTimeout(() => setHighlightedId(null), 2000);
+  }, []);
+
+  // Find a message by messageId, falling back to forwardFromMessageId
+  // (handles replies to forwarded messages where replyToMessageId is the original ID)
+  const findMessageIndex = useCallback(
+    (msgs: any[], targetId: string) => {
+      const idx = msgs.findIndex((msg: any) => msg.messageId === targetId);
+      if (idx >= 0) return idx;
+      return msgs.findIndex((msg: any) => msg.forwardFromMessageId === targetId);
+    },
+    []
+  );
+
+  // Perform the actual scroll after formattedMessages updates with fetched messages
+  const pendingScrollIdRef = useRef(pendingScrollId);
+  pendingScrollIdRef.current = pendingScrollId;
+
+  useEffect(() => {
+    if (!pendingScrollId) return;
+
+    const idx = findMessageIndex(formattedMessages, pendingScrollId);
+    if (idx < 0) return;
+
+    // Use the actual messageId of the found item (may differ from pendingScrollId for forwards)
+    const foundMsg = formattedMessages[idx];
+    const actualId = foundMsg?.messageId || pendingScrollId;
+
+    // Clear pending immediately so we don't re-trigger
+    setPendingScrollId(null);
+    scrollSearchRef.current = false;
+
+    // Offset by 2 so target message isn't hidden behind search bar
+    setForceScrollIndex(Math.max(0, idx - 2));
+    setVirtuosoKey((k) => k + 1);
+
+    // After remount, highlight and clear force index
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    scrollTimerRef.current = setTimeout(() => {
+      highlightMessage(actualId);
+      setForceScrollIndex(null);
+      scrollTimerRef.current = null;
+    }, 400);
+  }, [formattedMessages, firstItemIndex, pendingScrollId, highlightMessage, findMessageIndex]);
+
+  const scrollToMessage = useCallback(
+    async (messageId: string) => {
+      if (scrollSearchRef.current) return;
+
+      // Check if already in current list (also checks forwardFromMessageId for forwarded replies)
+      const idx = findMessageIndex(formattedMessages, messageId);
+
+      if (idx >= 0) {
+        const foundMsg = formattedMessages[idx];
+        const actualId = foundMsg?.messageId || messageId;
+        // Offset by 2 so target message isn't hidden behind search bar
+        setForceScrollIndex(Math.max(0, idx - 2));
+        setVirtuosoKey((k) => k + 1);
+        setTimeout(() => {
+          highlightMessage(actualId);
+          setForceScrollIndex(null);
+        }, 400);
+        return;
+      }
+
+      // Not found — set pending target and fetch older messages
+      setPendingScrollId(messageId);
+      scrollSearchRef.current = true;
+
+      let attempts = 0;
+      const maxAttempts = 20;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        const currentState = useMessageCacheStore.getState();
+        const msgs = currentState.messages;
+
+        if (!currentState.hasMoreOlder || msgs.length === 0) break;
+
+        const oldestId = msgs[0]?.messageId;
+        if (!oldestId) break;
+
+        await currentState.getMessagesList(talkId, oldestId, "older", 1000);
+
+        // Wait for React render cycle
+        await new Promise((r) => setTimeout(r, 200));
+
+        // Check if the effect already handled it
+        if (!pendingScrollIdRef.current) return;
+
+        // Also check directly in case effect hasn't fired yet
+        const updated = useMessageCacheStore.getState();
+        const foundIdx = findMessageIndex(updated.formattedMessages, messageId);
+        if (foundIdx >= 0) return;
+      }
+
+      // Exhausted — clean up
+      setPendingScrollId(null);
+      scrollSearchRef.current = false;
+    },
+    [talkId, formattedMessages, firstItemIndex, highlightMessage, findMessageIndex]
+  );
+
+  useImperativeHandle(ref, () => ({ scrollToBottom, scrollToMessage, markAllAsRead }), [scrollToBottom, scrollToMessage, markAllAsRead]);
+
+  if (!isMsgApiCall || formattedMessages.length === 0) {
+    if (isLoading) {
+      return <MessageListSkeleton />;
+    }
+    return <div className="h-full chat-bg" />;
+  }
+
+  return (
+    <div
+      className="relative h-full chat-bg"
+    >
+      <Virtuoso
+        key={`${talkId}-${virtuosoKey}`}
+        ref={virtuosoRef}
+        style={{ width: "100%", height: "100%", overflowX: "hidden" }}
+        data={formattedMessages}
+        firstItemIndex={firstItemIndex}
+        initialTopMostItemIndex={forceScrollIndex ?? firstUnreadIndex}
+        alignToBottom
+        overscan={400}
+        increaseViewportBy={{ top: 600, bottom: 200 }}
+        defaultItemHeight={60}
+        startReached={() => {
+          if (hasMoreOlder && !isLoading) {
+            // User scrolled to top — disable the "all read bottom" auto-scroll
+            allReadBottomRef.current = false;
+            const oldestId = messages[0]?.messageId;
+            if (oldestId)
+              getMessagesList(talkId, oldestId, "older", 50);
+          }
+        }}
+        endReached={() => {
+          if (hasMoreNewer && !isLoading) {
+            const newestId = messages[messages.length - 1]?.messageId;
+            if (newestId)
+              getMessagesList(talkId, newestId, "newer", 50);
+          }
+        }}
+        followOutput={(isBottom: boolean) => {
+          if (suppressFollowRef.current) return false;
+          return isBottom ? "smooth" : false;
+        }}
+        atBottomStateChange={(atBottom: boolean) => {
+          setIsAtBottom(atBottom);
+          if (atBottom) {
+            suppressFollowRef.current = false;
+          }
+        }}
+        atBottomThreshold={20}
+        rangeChanged={handleRangeChanged}
+        components={{ Footer: () => <div className="h-3" /> }}
+        itemContent={(index, message) => {
+          const arrayIndex = index - firstItemIndex;
+          const isSender =
+            String(message.senderChatuserId) === String(chatuserId);
+
+          // Date separator
+          if (message.type === "status") {
+            return (
+              <div className="flex items-center justify-center py-3">
+                <span
+                  className="rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest"
+                  style={{
+                    backgroundColor: 'var(--color-muted)',
+                    color: 'var(--color-muted-foreground)',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+                  }}
+                >
+                  {message.text}
+                </span>
+              </div>
+            );
+          }
+
+          // Unread label
+          const shouldShowUnreadLabel =
+            arrayIndex === liveFirstUnreadIndex &&
+            message.unread === 1 &&
+            !readMessages.has(message.messageId);
+
+          const prevMsg = formattedMessages[arrayIndex - 1];
+          const showSenderInfo =
+            !isSender &&
+            (message.senderChatuserId !== prevMsg?.senderChatuserId ||
+              new Date(message.created).getTime() -
+                new Date(prevMsg?.created || 0).getTime() >=
+                60000);
+
+          const isHighlighted = highlightedId === message.messageId;
+
+          // ── Media grid handling ──
+          const groupInfo = mediaGroups.get(message.messageId);
+
+          // Non-first items in a group are hidden (rendered by the first item)
+          if (groupInfo && !groupInfo.isFirst) {
+            return <div style={{ height: 1, overflow: "hidden" }} />;
+          }
+
+          // First item in a group → render MediaGrid
+          if (groupInfo && groupInfo.isFirst) {
+            return (
+              <div
+                data-message-id={message.messageId}
+                className={cn(
+                  showSenderInfo ? "px-4 pt-4 pb-1" : "px-4 py-1",
+                  isHighlighted && "rounded-xl bg-primary/10 transition-colors duration-500"
+                )}
+              >
+                {shouldShowUnreadLabel && (
+                  <div className="flex justify-center py-2">
+                    <span
+                      className="rounded-full bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-foreground shadow-sm"
+                    >
+                      Unread messages
+                    </span>
+                  </div>
+                )}
+                <MediaGrid
+                  messages={groupInfo.messages}
+                  isSender={isSender}
+                  showSenderInfo={showSenderInfo}
+                  senderName={message.senderName}
+                  senderProfile={message.senderProfile}
+                  isSelectionMode={isSelectionMode}
+                  isSelected={selectedMessages.some(
+                    (item: any) => groupInfo.messages.some((gm: any) => gm.messageId === item.messageId)
+                  )}
+                  onMediaClick={onMediaClick}
+                  onReply={onReply}
+                  onSelect={onSelect}
+                  onSelectMultiple={onSelectMultiple}
+                  onEnterSelectionMode={onEnterSelectionMode}
+                  onEnterSelectionModeMultiple={onEnterSelectionModeMultiple}
+                  onForwardMultiple={onForwardMultiple}
+                  onDeleteAll={onDeleteAll}
+                  onToggleReaction={onToggleReaction}
+                />
+              </div>
+            );
+          }
+
+          // ── Normal message bubble ──
+          return (
+            <div
+              data-message-id={message.messageId}
+              className={cn(
+                showSenderInfo ? "px-4 pt-4 pb-1" : "px-4 py-1",
+                isHighlighted && "rounded-xl bg-primary/10 transition-colors duration-500"
+              )}
+            >
+              {shouldShowUnreadLabel && (
+                <div className="flex justify-center py-2">
+                  <span
+                    className="rounded-full bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-foreground shadow-sm"
+                  >
+                    Unread messages
+                  </span>
+                </div>
+              )}
+              <MessageBubble
+                message={message}
+                isSender={isSender}
+                showSenderInfo={showSenderInfo}
+                isHovered={hoveredId === message.messageId}
+                isSelected={selectedMessages.some(
+                  (item: any) => item.messageId === message.messageId
+                )}
+                isSelectionMode={isSelectionMode}
+                onHover={onHover}
+                onReply={onReply}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onSelect={onSelect}
+                onEnterSelectionMode={onEnterSelectionMode}
+                onForward={onForward}
+                onMediaClick={onMediaClick}
+                onScrollToMessage={scrollToMessage}
+                onToggleReaction={onToggleReaction}
+                onTogglePin={onTogglePin}
+              />
+            </div>
+          );
+        }}
+      />
+
+      {/* Loading indicator for older messages */}
+      {isLoading && hasMoreOlder && (
+        <div className="absolute left-1/2 top-2 z-10 -translate-x-1/2">
+          <div className="flex items-center gap-2 rounded-full bg-card px-3 py-1 shadow-sm">
+            <Loader2 className="h-3 w-3 animate-spin text-primary" />
+            <span className="text-xs text-muted-foreground">Loading...</span>
+          </div>
+        </div>
+      )}
+
+      <ScrollToBottom
+        isVisible={!isAtBottom}
+        unreadCount={unreadBelowCount}
+        onClick={scrollToBottom}
+      />
+    </div>
+  );
+});
+
+export { type MessageListProps };

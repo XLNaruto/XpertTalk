@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/xpertlabuat/front/xperttalk/dev-sw.js?dev-sw', { scope: '/xpertlabuat/front/xperttalk/', type: 'classic' })
