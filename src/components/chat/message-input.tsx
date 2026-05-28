@@ -29,6 +29,7 @@ export interface MessageInputProps {
   isReply: boolean;
   replyMessage: any;
   replyMessageId: string | null;
+  replyAllMessageIds: string[];
   onCancelReply: () => void;
   mentionMembers: any[];
   emit: (event: string, data?: any, ack?: (response: any) => void) => void;
@@ -114,6 +115,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       isReply,
       replyMessage,
       replyMessageId,
+      replyAllMessageIds,
       onCancelReply,
       mentionMembers,
       emit,
@@ -373,16 +375,27 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
               ),
             });
           } else if (isConnected) {
-            const messageData: any = {
-              message: formatMessageWithMentions(
-                currentMessage.trim(),
-                mentionMembers
-              ),
-            };
-            if (replyMessageId) {
-              messageData.replyToMessageId = replyMessageId;
+            const formattedText = formatMessageWithMentions(
+              currentMessage.trim(),
+              mentionMembers
+            );
+            if (replyAllMessageIds.length > 0) {
+              // Reply All: send the message once per media item, one-by-one
+              // over the socket (small gap keeps server ordering stable).
+              for (const id of replyAllMessageIds) {
+                emit("sendMessage", {
+                  message: formattedText,
+                  replyToMessageId: id,
+                });
+                await new Promise((resolve) => setTimeout(resolve, 50));
+              }
+            } else {
+              const messageData: any = { message: formattedText };
+              if (replyMessageId) {
+                messageData.replyToMessageId = replyMessageId;
+              }
+              emit("sendMessage", messageData);
             }
-            emit("sendMessage", messageData);
           }
         }
 
@@ -402,6 +415,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       uploadFiles,
       talkId,
       replyMessageId,
+      replyAllMessageIds,
       isEditing,
       editingMessageId,
       emit,
@@ -518,13 +532,29 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
                 }}
               />
             </div>
-            {replyMessage.messageType === "IMAGE" && replyMessage.mediaPath && (
-              <img
-                src={replyMessage.mediaPath}
-                alt=""
-                className="h-9 w-9 shrink-0 rounded-md object-cover"
-              />
-            )}
+            {(replyMessage.messageType === "IMAGE" ||
+              replyMessage.messageType === "VIDEO") &&
+              replyMessage.mediaPath && (
+                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md">
+                  {replyMessage.messageType === "IMAGE" ? (
+                    <img
+                      src={replyMessage.mediaPath}
+                      alt=""
+                      className="h-full w-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  ) : (
+                    <video
+                      src={replyMessage.mediaPath}
+                      muted
+                      preload="metadata"
+                      className="h-full w-full object-cover"
+                    />
+                  )}
+                </div>
+              )}
             <button
               type="button"
               onClick={onCancelReply}

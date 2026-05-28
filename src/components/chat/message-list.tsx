@@ -18,9 +18,8 @@ export interface MessageListHandle {
 
 interface MessageListProps {
   talkId: string;
-  hoveredId: string | null;
-  onHover: (id: string | null) => void;
   onReply: (msg: any) => void;
+  onReplyAll: (msgs: any[]) => void;
   onEdit: (msg: any) => void;
   onDelete: (id: string) => void;
   onDeleteAll: (ids: string[]) => void;
@@ -90,9 +89,8 @@ function computeMediaGroups(messages: any[]): Map<string, { messages: any[]; isF
 
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(function MessageList({
   talkId,
-  hoveredId,
-  onHover,
   onReply,
+  onReplyAll,
   onEdit,
   onDelete,
   onDeleteAll,
@@ -426,6 +424,23 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     []
   );
 
+  // Non-first members of a media group render as 1px hidden divs — only the
+  // group's first message renders the visible grid. Resolve any group member
+  // to its first message so scroll/highlight lands on the rendered grid.
+  const resolveGroupTarget = useCallback(
+    (msgs: any[], idx: number) => {
+      const foundMsg = msgs[idx];
+      const groupInfo = foundMsg && mediaGroups.get(foundMsg.messageId);
+      if (groupInfo && !groupInfo.isFirst) {
+        const firstId = groupInfo.messages[0]?.messageId;
+        const firstIdx = msgs.findIndex((m: any) => m.messageId === firstId);
+        if (firstIdx >= 0) return { idx: firstIdx, id: firstId };
+      }
+      return { idx, id: foundMsg?.messageId };
+    },
+    [mediaGroups]
+  );
+
   // Perform the actual scroll after formattedMessages updates with fetched messages
   const pendingScrollIdRef = useRef(pendingScrollId);
   pendingScrollIdRef.current = pendingScrollId;
@@ -433,12 +448,12 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   useEffect(() => {
     if (!pendingScrollId) return;
 
-    const idx = findMessageIndex(formattedMessages, pendingScrollId);
-    if (idx < 0) return;
+    const rawIdx = findMessageIndex(formattedMessages, pendingScrollId);
+    if (rawIdx < 0) return;
 
-    // Use the actual messageId of the found item (may differ from pendingScrollId for forwards)
-    const foundMsg = formattedMessages[idx];
-    const actualId = foundMsg?.messageId || pendingScrollId;
+    // Resolve media-group members to the group's first (rendered) message
+    const { idx, id } = resolveGroupTarget(formattedMessages, rawIdx);
+    const actualId = id || pendingScrollId;
 
     // Clear pending immediately so we don't re-trigger
     setPendingScrollId(null);
@@ -455,18 +470,19 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       setForceScrollIndex(null);
       scrollTimerRef.current = null;
     }, 400);
-  }, [formattedMessages, firstItemIndex, pendingScrollId, highlightMessage, findMessageIndex]);
+  }, [formattedMessages, firstItemIndex, pendingScrollId, highlightMessage, findMessageIndex, resolveGroupTarget]);
 
   const scrollToMessage = useCallback(
     async (messageId: string) => {
       if (scrollSearchRef.current) return;
 
       // Check if already in current list (also checks forwardFromMessageId for forwarded replies)
-      const idx = findMessageIndex(formattedMessages, messageId);
+      const rawIdx = findMessageIndex(formattedMessages, messageId);
 
-      if (idx >= 0) {
-        const foundMsg = formattedMessages[idx];
-        const actualId = foundMsg?.messageId || messageId;
+      if (rawIdx >= 0) {
+        // Resolve media-group members to the group's first (rendered) message
+        const { idx, id } = resolveGroupTarget(formattedMessages, rawIdx);
+        const actualId = id || messageId;
         // Offset by 2 so target message isn't hidden behind search bar
         setForceScrollIndex(Math.max(0, idx - 2));
         setVirtuosoKey((k) => k + 1);
@@ -512,7 +528,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       setPendingScrollId(null);
       scrollSearchRef.current = false;
     },
-    [talkId, formattedMessages, firstItemIndex, highlightMessage, findMessageIndex]
+    [talkId, formattedMessages, firstItemIndex, highlightMessage, findMessageIndex, resolveGroupTarget]
   );
 
   useImperativeHandle(ref, () => ({ scrollToBottom, scrollToMessage, markAllAsRead }), [scrollToBottom, scrollToMessage, markAllAsRead]);
@@ -646,6 +662,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                   )}
                   onMediaClick={onMediaClick}
                   onReply={onReply}
+                  onReplyAll={onReplyAll}
                   onSelect={onSelect}
                   onSelectMultiple={onSelectMultiple}
                   onEnterSelectionMode={onEnterSelectionMode}
@@ -680,12 +697,10 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 message={message}
                 isSender={isSender}
                 showSenderInfo={showSenderInfo}
-                isHovered={hoveredId === message.messageId}
                 isSelected={selectedMessages.some(
                   (item: any) => item.messageId === message.messageId
                 )}
                 isSelectionMode={isSelectionMode}
-                onHover={onHover}
                 onReply={onReply}
                 onEdit={onEdit}
                 onDelete={onDelete}

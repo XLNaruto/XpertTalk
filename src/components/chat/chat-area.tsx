@@ -12,7 +12,7 @@ import { getEncodedCookie, encryptUrlData } from "@/lib/encryption";
 import { apiHeader, postData } from "@/lib/api-helper";
 import { toast } from "sonner";
 import { unformatMentionsFromMessage } from "@/lib/message-formatters";
-import { MessageSquare, Sparkles, Download, Trash2, Forward, Pin, PinOff } from "lucide-react";
+import { MessageSquare, Sparkles, Download, Trash2, Forward, Pin, PinOff, Reply } from "lucide-react";
 import ChatHeader from "@/components/chat/chat-header";
 import { MessageList, type MessageListHandle } from "@/components/chat/message-list";
 import MessageInput from "@/components/chat/message-input";
@@ -79,9 +79,9 @@ export function ChatArea() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [replyMessage, setReplyMessage] = useState<any>({});
   const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
+  const [replyAllMessageIds, setReplyAllMessageIds] = useState<string[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [isReply, setIsReply] = useState(false);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [groupMemberCount, setGroupMemberCount] = useState(0);
   const [groupMembers, setGroupMembers] = useState<any[]>([]);
   const [isGroupSheetOpen, setIsGroupSheetOpen] = useState(false);
@@ -389,6 +389,7 @@ export function ChatArea() {
     setIsEditing(false);
     setReplyMessage({});
     setReplyMessageId(null);
+    setReplyAllMessageIds([]);
     setIsReply(false);
 
     // Reset group state
@@ -414,6 +415,7 @@ export function ChatArea() {
     if (msg.messageId && msg.messageText) {
       setReplyMessageId(null);
       setReplyMessage({});
+      setReplyAllMessageIds([]);
       setIsReply(false);
       setEditingMessageId(msg.messageId);
       setIsEditing(true);
@@ -435,6 +437,7 @@ export function ChatArea() {
     if (msg.forwardFromMessageId) {
       setEditingMessageId(null);
       setIsEditing(false);
+      setReplyAllMessageIds([]);
       setReplyMessageId(msg.messageId);
       setReplyMessage({
         ...msg.forwardMessage,
@@ -444,6 +447,7 @@ export function ChatArea() {
     } else if (msg.messageId) {
       setEditingMessageId(null);
       setIsEditing(false);
+      setReplyAllMessageIds([]);
       setReplyMessageId(msg.messageId);
       setReplyMessage(msg);
       setIsReply(true);
@@ -452,9 +456,25 @@ export function ChatArea() {
     setTimeout(() => messageInputRef.current?.focus(), 50);
   }, []);
 
+  // Reply to every media item in a group — the typed message is sent
+  // once per item (one-by-one over the socket) when the user hits send.
+  const startReplyAll = useCallback((msgs: any[]) => {
+    if (!msgs?.length) return;
+    const ids = msgs.map((m: any) => m.messageId).filter(Boolean);
+    if (ids.length === 0) return;
+    setEditingMessageId(null);
+    setIsEditing(false);
+    setReplyMessageId(ids[0]);
+    setReplyMessage(msgs[0]);
+    setReplyAllMessageIds(ids);
+    setIsReply(true);
+    setTimeout(() => messageInputRef.current?.focus(), 50);
+  }, []);
+
   const cancelReply = useCallback(() => {
     setReplyMessageId(null);
     setReplyMessage({});
+    setReplyAllMessageIds([]);
     setIsReply(false);
   }, []);
 
@@ -464,6 +484,7 @@ export function ChatArea() {
     setIsEditing(false);
     setReplyMessage({});
     setReplyMessageId(null);
+    setReplyAllMessageIds([]);
     setIsReply(false);
     // Mark all unread messages as read when user sends a message
     messageListRef.current?.markAllAsRead();
@@ -603,8 +624,11 @@ export function ChatArea() {
 
   // ── Stable callbacks ──
 
-  const handleHover = useCallback((id: string | null) => setHoveredId(id), []);
   const handleReply = useCallback((msg: any) => startReply(msg), [startReply]);
+  const handleReplyAll = useCallback(
+    (msgs: any[]) => startReplyAll(msgs),
+    [startReplyAll]
+  );
   const handleEdit = useCallback((msg: any) => startEditing(msg), [startEditing]);
   const handleDelete = useCallback(
     (id: string) => deleteMessage(id),
@@ -747,9 +771,8 @@ export function ChatArea() {
         <MessageList
           ref={messageListRef}
           talkId={talkId}
-          hoveredId={hoveredId}
-          onHover={handleHover}
           onReply={handleReply}
+          onReplyAll={handleReplyAll}
           onEdit={handleEdit}
           onDelete={handleDelete}
           onSelect={handleSelect}
@@ -802,6 +825,7 @@ export function ChatArea() {
         isReply={isReply}
         replyMessage={replyMessage}
         replyMessageId={replyMessageId}
+        replyAllMessageIds={replyAllMessageIds}
         onCancelReply={cancelReply}
         mentionMembers={groupMembers}
         emit={emit}
@@ -900,6 +924,8 @@ export function ChatArea() {
                   key="lightbox-download"
                   type="button"
                   className="yarl__button"
+                  title="Download"
+                  aria-label="Download"
                   onClick={async () => {
                     if (!currentSlide) return;
                     const url = currentSlide.mediaPath;
@@ -923,9 +949,25 @@ export function ChatArea() {
                   <Download className="h-6 w-6" />
                 </button>,
                 <button
+                  key="lightbox-reply"
+                  type="button"
+                  className="yarl__button"
+                  title="Reply"
+                  aria-label="Reply"
+                  onClick={() => {
+                    if (!currentSlide) return;
+                    handleReply(currentSlide);
+                    closeLightbox();
+                  }}
+                >
+                  <Reply className="h-6 w-6" />
+                </button>,
+                <button
                   key="lightbox-forward"
                   type="button"
                   className="yarl__button"
+                  title="Forward"
+                  aria-label="Forward"
                   onClick={() => {
                     if (!currentSlide) return;
                     const id = currentSlide.forwardFromMessageId || currentSlide.messageId;
@@ -942,6 +984,8 @@ export function ChatArea() {
                   key="lightbox-pin"
                   type="button"
                   className="yarl__button"
+                  title={currentSlide?.isPinned ? "Unpin" : "Pin"}
+                  aria-label={currentSlide?.isPinned ? "Unpin" : "Pin"}
                   onClick={() => {
                     if (!currentSlide?.messageId) return;
                     handleTogglePin(currentSlide.messageId);
@@ -958,6 +1002,8 @@ export function ChatArea() {
                         key="lightbox-delete"
                         type="button"
                         className="yarl__button"
+                        title="Delete"
+                        aria-label="Delete"
                         onClick={() => setLightboxDeleteOpen(true)}
                       >
                         <Trash2 className="h-6 w-6" />

@@ -5,6 +5,7 @@ import {
   CheckCheck,
   Trash2,
   Reply,
+  ReplyAll,
   Forward,
   Download,
   SquareCheck,
@@ -43,6 +44,7 @@ interface MediaGridProps {
   isSelected: boolean;
   onMediaClick: (mediaPath: string, mediaType: "image" | "video") => void;
   onReply: (message: any) => void;
+  onReplyAll: (messages: any[]) => void;
   onSelect: (message: any) => void;
   onSelectMultiple: (messages: any[]) => void;
   onEnterSelectionMode: (message: any) => void;
@@ -79,6 +81,7 @@ function MediaGrid({
   isSelected,
   onMediaClick,
   onReply,
+  onReplyAll,
   onSelectMultiple,
   onEnterSelectionMode: _onEnterSelectionMode,
   onEnterSelectionModeMultiple,
@@ -309,6 +312,14 @@ function MediaGrid({
             >
               <Reply className="h-4 w-4" /> Reply
             </ContextMenuItem>
+            {messages.length > 1 && (
+              <ContextMenuItem
+                onClick={() => onReplyAll(messages)}
+                className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+              >
+                <ReplyAll className="h-4 w-4" /> Reply All
+              </ContextMenuItem>
+            )}
             <ContextMenuItem
               onClick={() => onForwardMultiple(messages)}
               className="gap-2 rounded-lg px-2.5 py-2 text-sm"

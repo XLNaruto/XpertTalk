@@ -674,6 +674,10 @@ export function ChatSidebar() {
           <Input
             placeholder="Search..."
             className="h-9 rounded-xl border-2 border-border bg-card pl-9 pr-8 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-primary/30 focus-visible:border-primary/50"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={handleSearchKeyDown}
@@ -684,7 +688,7 @@ export function ChatSidebar() {
           />
           {isSearch && (
             <button
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer rounded-full p-0.5 text-muted-foreground transition-colors hover:text-foreground"
               onClick={closeSearch}
             >
               <X className="h-3.5 w-3.5" />

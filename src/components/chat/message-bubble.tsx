@@ -80,10 +80,8 @@ interface MessageBubbleProps {
   message: any;
   isSender: boolean;
   showSenderInfo: boolean;
-  isHovered: boolean;
   isSelected: boolean;
   isSelectionMode: boolean;
-  onHover: (messageId: string | null) => void;
   onReply: (message: any) => void;
   onEdit: (message: any) => void;
   onDelete: (messageId: string) => void;
@@ -305,10 +303,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
   isSender,
   showSenderInfo,
-  isHovered,
   isSelected,
   isSelectionMode,
-  onHover,
   onReply,
   onEdit,
   onDelete,
@@ -758,11 +754,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       {/* Bubble column — only this part triggers the context menu */}
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={isSelectionMode}>
-          <div
-            className="group relative min-w-0 max-w-[55%]"
-            onMouseEnter={() => onHover(message.messageId)}
-            onMouseLeave={() => onHover(null)}
-          >
+          <div className="group relative min-w-0 max-w-[55%]">
             {/* Bubble + sender name — w-fit so only bubble content sets width */}
             <div className={cn(
               "w-fit min-w-0",
@@ -780,9 +772,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 {renderBubbleContent()}
 
                 {/* Add reaction button at bottom corner — show on hover OR when bar is open */}
-                {!message.reactions?.length && (isHovered || reactionBarOpen) && !isSelectionMode && (
+                {!message.reactions?.length && !isSelectionMode && (
                   <div className={cn(
-                    "absolute -bottom-2.5 z-[2]",
+                    "absolute -bottom-2.5 z-[2] opacity-0 transition-opacity group-hover:opacity-100",
+                    reactionBarOpen && "opacity-100",
                     isSender ? "left-0 -translate-x-1/2" : "right-0 translate-x-1/2"
                   )}>
                     <QuickReactionsBar
@@ -868,7 +861,6 @@ function areEqual(
     prev.message.updated === next.message.updated &&
     prev.message.isReadByAll === next.message.isReadByAll &&
     prev.isSender === next.isSender &&
-    prev.isHovered === next.isHovered &&
     prev.isSelected === next.isSelected &&
     prev.isSelectionMode === next.isSelectionMode &&
     prev.showSenderInfo === next.showSenderInfo &&

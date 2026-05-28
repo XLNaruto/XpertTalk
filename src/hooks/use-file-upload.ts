@@ -244,6 +244,8 @@ export default function useFileUpload({
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    // Only react to drags that carry files, not dragged text/links/elements.
+    if (!e.dataTransfer.types.includes("Files")) return;
     dragCounter.current += 1;
     if (dragCounter.current === 1) {
       setIsFileDragging(true);
@@ -252,6 +254,7 @@ export default function useFileUpload({
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    if (!e.dataTransfer.types.includes("Files")) return;
     dragCounter.current -= 1;
     if (dragCounter.current === 0) {
       setIsFileDragging(false);
