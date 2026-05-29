@@ -14,6 +14,7 @@ import { Bell, X } from "lucide-react";
 
 function InitChat() {
   const setActiveChat = useChatStore((s) => s.setActiveChat);
+  const setDeepLinkMessageId = useChatStore((s) => s.setDeepLinkMessageId);
   const talkIdState = useChatStore((s) => s.activeChat.talkId);
   const { getUserList, receiverData } = useUserListStore();
   const isMobile = useIsMobile();
@@ -32,7 +33,13 @@ function InitChat() {
     talkName: urlTalkName,
     isActive: urlIsActive,
     isGroupAdmin: urlIsGroupAdmin,
+    messageId: urlMessageId,
   } = decryptedData || {};
+
+  // Stash deep-link target messageId — chat-area picks it up after messages load.
+  useEffect(() => {
+    if (urlMessageId) setDeepLinkMessageId(String(urlMessageId));
+  }, [urlMessageId, setDeepLinkMessageId]);
 
   // Fetch user list on mount and when layout changes
   useEffect(() => {

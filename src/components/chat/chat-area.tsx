@@ -58,6 +58,8 @@ export function ChatArea() {
   const talkProfile = useChatStore((s) => s.activeChat.talkProfile);
   const isActive = useChatStore((s) => s.activeChat.isActive);
   const isGroupAdmin = useChatStore((s) => s.activeChat.isGroupAdmin);
+  const deepLinkMessageId = useChatStore((s) => s.deepLinkMessageId);
+  const setDeepLinkMessageId = useChatStore((s) => s.setDeepLinkMessageId);
   const getMessagesList = useMessageCacheStore((s) => s.getMessagesList);
 
   // Message cache store
@@ -408,6 +410,28 @@ export function ChatArea() {
       fetchGroupDetail(talkId);
     }
   }, [talkId, talkType, fetchGroupDetail]);
+
+  // ── Deep-link: scroll to a specific message when arriving via encrypted URL ──
+  // Fires once per (talkId, deepLinkMessageId) pair, after messages have loaded.
+  // Clears the URL `?data=...` param and the store flag so a reload won't re-trigger.
+  const deepLinkFiredRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!deepLinkMessageId || !talkId || messages.length === 0) return;
+    const key = `${talkId}:${deepLinkMessageId}`;
+    if (deepLinkFiredRef.current === key) return;
+    deepLinkFiredRef.current = key;
+
+    // Defer one tick so MessageList has rendered the current page.
+    setTimeout(() => {
+      messageListRef.current?.scrollToMessage(deepLinkMessageId);
+    }, 50);
+
+    // Clear `?data=...` from the address bar so reload doesn't repeat the jump.
+    if (window.location.search) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    setDeepLinkMessageId(null);
+  }, [deepLinkMessageId, talkId, messages.length, setDeepLinkMessageId]);
 
   // ── Edit/Reply handlers ──
 

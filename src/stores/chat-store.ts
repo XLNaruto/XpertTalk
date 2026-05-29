@@ -25,6 +25,11 @@ interface ChatStore {
   // Window focus
   isWindowFocused: boolean;
   setWindowFocused: (val: boolean) => void;
+
+  // Deep-link target message (from encrypted URL `data.messageId`).
+  // Set by chat-page on mount; consumed and cleared by chat-area after scroll.
+  deepLinkMessageId: string | null;
+  setDeepLinkMessageId: (id: string | null) => void;
 }
 
 const DEFAULT_CHAT: ActiveChat = {
@@ -45,6 +50,8 @@ export const useChatStore = create<ChatStore>((set) => ({
   clearActiveChat: () => set({ activeChat: DEFAULT_CHAT }),
   isWindowFocused: true,
   setWindowFocused: (val) => set({ isWindowFocused: val }),
+  deepLinkMessageId: null,
+  setDeepLinkMessageId: (id) => set({ deepLinkMessageId: id }),
 }));
 
 export type { ActiveChat };
