@@ -52,6 +52,11 @@ export function EmojiPickerPopover({ onEmojiSelect }: EmojiPickerPopoverProps) {
         <div
           ref={pickerRef}
           className="absolute bottom-10 left-0 z-50 rounded-xl border border-border/50 bg-popover shadow-xl"
+          // Prevent clicks inside the picker (esp. the search box) from bubbling
+          // to the input-row wrapper, whose onClick refocuses the textarea and
+          // steals focus away from the emoji search field.
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
           <Suspense
             fallback={

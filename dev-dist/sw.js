@@ -83,7 +83,7 @@ define(['./workbox-b6866b34'], (function (workbox) { 'use strict';
     "revision": "78582faad8c53d39ee8111c3f007cb0d"
   }, {
     "url": "index.html",
-    "revision": "0.q84uc5hs92"
+    "revision": "0.ch4v0pvoaq"
   }], {
     "ignoreURLParametersMatching": [/^utm_/, /^fbclid$/]
   });

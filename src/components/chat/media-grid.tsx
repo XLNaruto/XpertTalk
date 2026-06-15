@@ -27,6 +27,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { UserAvatar } from "@/components/shared/user-avatar";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { getEncodedCookie } from "@/lib/encryption";
@@ -77,6 +78,7 @@ function MediaGrid({
   isSender,
   showSenderInfo,
   senderName,
+  senderProfile,
   isSelectionMode,
   isSelected,
   onMediaClick,
@@ -226,10 +228,16 @@ function MediaGrid({
           isSender && "flex-row-reverse"
         )}
       >
-        {/* Avatar spacer for received messages */}
+        {/* Avatar for received messages */}
         {!isSender &&
           (showSenderInfo ? (
-            <div className="mt-0.5 w-8 shrink-0" />
+            <div className="mt-0.5 shrink-0">
+              <UserAvatar
+                src={senderProfile}
+                name={senderName}
+                size="default"
+              />
+            </div>
           ) : (
             <div className="w-8 shrink-0" />
           ))}

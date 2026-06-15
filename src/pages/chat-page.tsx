@@ -12,6 +12,30 @@ import { Bell, X } from "lucide-react";
 
 // userStage removed — endpoints now use common prefix
 
+// FCM payload `data` fields arrive as strings ("true"/"false"); normalize the
+// boolean flags so downstream `|| false` logic doesn't treat "false" as truthy.
+function normalizeNotifData(data: any) {
+  if (!data || typeof data !== "object") return {};
+  const out: any = { ...data };
+  if ("isActive" in out) out.isActive = out.isActive === true || out.isActive === "true";
+  if ("isGroupAdmin" in out)
+    out.isGroupAdmin = out.isGroupAdmin === true || out.isGroupAdmin === "true";
+  return out;
+}
+
+// Decode the SW notification deep-link param (`fcm` = base64-encoded JSON).
+function decodeFcmParam(raw: string | null) {
+  if (!raw) return {};
+  try {
+    const bin = atob(decodeURIComponent(raw));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    const json = new TextDecoder().decode(bytes);
+    return normalizeNotifData(JSON.parse(json));
+  } catch {
+    return {};
+  }
+}
+
 function InitChat() {
   const setActiveChat = useChatStore((s) => s.setActiveChat);
   const setDeepLinkMessageId = useChatStore((s) => s.setDeepLinkMessageId);
@@ -24,6 +48,10 @@ function InitChat() {
   // URL params
   const queryParams = new URLSearchParams(location.search);
   const decryptedData: any = decryptUrlData(queryParams.get("data"));
+  // Notification deep-link: SW passes the FCM payload as base64 JSON in `fcm`.
+  // Merged on top of the encrypted `data` param (only one is present normally).
+  const fcmData: any = decodeFcmParam(queryParams.get("fcm"));
+  const mergedData = { ...(decryptedData || {}), ...(fcmData || {}) };
   const {
     talkId: urlTalkId,
     receiverId: urlReceiverId,
@@ -34,7 +62,7 @@ function InitChat() {
     isActive: urlIsActive,
     isGroupAdmin: urlIsGroupAdmin,
     messageId: urlMessageId,
-  } = decryptedData || {};
+  } = mergedData;
 
   // Stash deep-link target messageId — chat-area picks it up after messages load.
   useEffect(() => {
@@ -219,6 +247,29 @@ function InitChat() {
     })();
     return () => unsubscribe?.();
   }, []);
+
+  // Notification click on an already-open app: the SW posts OPEN_CHAT and we
+  // switch the active chat in place (no reload).
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type !== "OPEN_CHAT") return;
+      const d = normalizeNotifData(event.data.data);
+      setActiveChat({
+        talkId: d.talkId || "",
+        receiverId: d.receiverId || "",
+        receiverType: d.receiverType || "",
+        receiverName: d.receiverName || "",
+        talkType: d.talkType || "",
+        talkName: d.talkName || "",
+        isActive: d.isActive || false,
+        isGroupAdmin: d.isGroupAdmin || false,
+      });
+      if (d.messageId) setDeepLinkMessageId(String(d.messageId));
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, [setActiveChat, setDeepLinkMessageId]);
 
   // Window focus/blur + visibility change listeners
   useEffect(() => {

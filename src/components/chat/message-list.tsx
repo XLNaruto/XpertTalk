@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 import MessageBubble from "@/components/chat/message-bubble";
 import MediaGrid from "@/components/chat/media-grid";
+import ReplyAllBubble from "@/components/chat/reply-all-bubble";
 import { MessageListSkeleton } from "@/components/chat/message-list-skeleton";
 import { ScrollToBottom } from "@/components/chat/scroll-to-bottom";
 
@@ -87,6 +88,61 @@ function computeMediaGroups(messages: any[]): Map<string, { messages: any[]; isF
   return groups;
 }
 
+// ── Reply-all group detection ──
+// A "Reply All" on a media grid sends one identical reply per media item. This
+// groups that burst (same sender, identical text, each replying to media,
+// within 10s) so it can be collapsed into a single bubble with a grid preview.
+function computeReplyAllGroups(messages: any[]): Map<string, { messages: any[]; isFirst: boolean }> {
+  const groups = new Map<string, { messages: any[]; isFirst: boolean }>();
+  let currentGroup: any[] = [];
+
+  const flush = () => {
+    if (currentGroup.length > 1) {
+      const groupMsgs = [...currentGroup];
+      groupMsgs.forEach((msg, i) => {
+        groups.set(msg.messageId, { messages: groupMsgs, isFirst: i === 0 });
+      });
+    }
+    currentGroup = [];
+  };
+
+  for (const msg of messages) {
+    if (msg.type !== "message") { flush(); continue; }
+
+    const isMediaReply =
+      msg.messageType === "TEXT" &&
+      msg.replyToMessageId &&
+      !msg.forwardFromMessageId &&
+      msg.messageText &&
+      (msg.replyMessage?.messageType === "IMAGE" ||
+        msg.replyMessage?.messageType === "VIDEO");
+
+    if (!isMediaReply) { flush(); continue; }
+
+    if (currentGroup.length === 0) {
+      currentGroup.push(msg);
+      continue;
+    }
+
+    const prev = currentGroup[currentGroup.length - 1];
+    const timeDiff = Math.abs(
+      new Date(msg.created).getTime() - new Date(prev.created).getTime()
+    );
+    const sameSender = msg.senderChatuserId === prev.senderChatuserId;
+    const sameText = msg.messageText === prev.messageText;
+
+    if (sameSender && sameText && timeDiff <= 10000) {
+      currentGroup.push(msg);
+    } else {
+      flush();
+      currentGroup.push(msg);
+    }
+  }
+  flush();
+
+  return groups;
+}
+
 export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(function MessageList({
   talkId,
   onReply,
@@ -124,6 +180,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   // Compute media groups for grid rendering
   const mediaGroups = useMemo(
     () => computeMediaGroups(formattedMessages),
+    [formattedMessages]
+  );
+  // Collapse "Reply All" bursts into a single grid-preview bubble
+  const replyAllGroups = useMemo(
+    () => computeReplyAllGroups(formattedMessages),
     [formattedMessages]
   );
   const [readMessages, setReadMessages] = useState<Set<string>>(new Set());
@@ -459,17 +520,19 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setPendingScrollId(null);
     scrollSearchRef.current = false;
 
-    // Offset by 2 so target message isn't hidden behind search bar
-    setForceScrollIndex(Math.max(0, idx - 2));
-    setVirtuosoKey((k) => k + 1);
-
-    // After remount, highlight and clear force index
+    // Let the freshly-prepended list settle a tick, then scroll imperatively.
+    // scrollToIndex re-corrects against real item heights (unlike the
+    // defaultItemHeight estimate), so tall media bubbles land accurately.
     if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
     scrollTimerRef.current = setTimeout(() => {
+      virtuosoRef.current?.scrollToIndex({
+        index: idx,
+        align: "center",
+        behavior: "auto",
+      });
       highlightMessage(actualId);
-      setForceScrollIndex(null);
       scrollTimerRef.current = null;
-    }, 400);
+    }, 150);
   }, [formattedMessages, firstItemIndex, pendingScrollId, highlightMessage, findMessageIndex, resolveGroupTarget]);
 
   const scrollToMessage = useCallback(
@@ -483,13 +546,17 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         // Resolve media-group members to the group's first (rendered) message
         const { idx, id } = resolveGroupTarget(formattedMessages, rawIdx);
         const actualId = id || messageId;
-        // Offset by 2 so target message isn't hidden behind search bar
-        setForceScrollIndex(Math.max(0, idx - 2));
-        setVirtuosoKey((k) => k + 1);
-        setTimeout(() => {
-          highlightMessage(actualId);
-          setForceScrollIndex(null);
-        }, 400);
+        // Use the imperative scrollToIndex instead of an initialTopMostItemIndex
+        // remount: it re-corrects after measuring real item heights, so tall
+        // media / media-grid bubbles land accurately. The remount path relied on
+        // defaultItemHeight (60px) and mis-estimated big media, scrolling to the
+        // wrong place (document replies happened to work because they're ~60px).
+        virtuosoRef.current?.scrollToIndex({
+          index: idx,
+          align: "center",
+          behavior: "auto",
+        });
+        highlightMessage(actualId);
         return;
       }
 
@@ -670,6 +737,51 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                   onForwardMultiple={onForwardMultiple}
                   onDeleteAll={onDeleteAll}
                   onToggleReaction={onToggleReaction}
+                />
+              </div>
+            );
+          }
+
+          // ── Reply-all group handling ──
+          const replyAllInfo = replyAllGroups.get(message.messageId);
+
+          // Non-first items in a reply-all group are hidden (rendered by the first)
+          if (replyAllInfo && !replyAllInfo.isFirst) {
+            return <div style={{ height: 1, overflow: "hidden" }} />;
+          }
+
+          // First item in a reply-all group → render the collapsed grid bubble
+          if (replyAllInfo && replyAllInfo.isFirst) {
+            return (
+              <div
+                data-message-id={message.messageId}
+                className={cn(
+                  showSenderInfo ? "px-4 pt-4 pb-1" : "px-4 py-1",
+                  isHighlighted && "rounded-xl bg-primary/10 transition-colors duration-500"
+                )}
+              >
+                {shouldShowUnreadLabel && (
+                  <div className="flex justify-center py-2">
+                    <span className="rounded-full bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-foreground shadow-sm">
+                      Unread messages
+                    </span>
+                  </div>
+                )}
+                <ReplyAllBubble
+                  messages={replyAllInfo.messages}
+                  isSender={isSender}
+                  showSenderInfo={showSenderInfo}
+                  isSelected={selectedMessages.some(
+                    (item: any) => replyAllInfo.messages.some((gm: any) => gm.messageId === item.messageId)
+                  )}
+                  isSelectionMode={isSelectionMode}
+                  onReply={onReply}
+                  onForward={onForward}
+                  onDeleteAll={onDeleteAll}
+                  onSelectMultiple={onSelectMultiple}
+                  onEnterSelectionModeMultiple={onEnterSelectionModeMultiple}
+                  onToggleReaction={onToggleReaction}
+                  onScrollToMessage={scrollToMessage}
                 />
               </div>
             );

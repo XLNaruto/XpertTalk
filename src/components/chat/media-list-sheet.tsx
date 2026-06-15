@@ -180,11 +180,14 @@ export function MediaListSheet({
   };
 
   const images = useMemo(
-    () => mediaItems.filter((m) => m.mediaType === "IMAGE" || m.mediaType === "VIDEO"),
+    () =>
+      mediaItems
+        .filter((m) => m.mediaType === "IMAGE" || m.mediaType === "VIDEO")
+        .reverse(),
     [mediaItems]
   );
   const documents = useMemo(
-    () => mediaItems.filter((m) => m.mediaType === "DOCUMENT"),
+    () => mediaItems.filter((m) => m.mediaType === "DOCUMENT").reverse(),
     [mediaItems]
   );
 

@@ -577,7 +577,7 @@ export function ChatSidebar() {
         if (token) {
           await postData(
             "auth/fcm/remove",
-            { token, platform: "WEB" },
+            { token },
             apiHeader(false, 0),
           );
         }
