@@ -34,6 +34,7 @@ interface MessageListProps {
   isSelectionMode: boolean;
   selectedMessages: any[];
   readMessagesApi: (messageId: string, created: string, talkId: string) => void;
+  onUnreadCountChange?: (count: number) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
   onTogglePin: (messageId: string) => void;
 }
@@ -160,6 +161,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   isSelectionMode,
   selectedMessages,
   readMessagesApi,
+  onUnreadCountChange,
   onToggleReaction,
   onTogglePin,
 }, ref) {
@@ -209,6 +211,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const initialUnreadRef = useRef<number | null>(null);
   const prevTalkIdRef = useRef(talkId);
   const allReadBottomRef = useRef(false);
+  // For "all read" chats, keep re-asserting bottom until this deadline. Cached
+  // chats swap formattedMessages up to 3x (cached → newer-sync → full-sync) and
+  // media loads async — each reflow can strand the view mid-list, so a one-shot
+  // scroll isn't enough during the initial settle.
+  const allReadSettleUntilRef = useRef(Date.now() + 2500);
 
   if (prevTalkIdRef.current !== talkId) {
     // Reset when switching chats
@@ -217,6 +224,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     initialPositionDoneRef.current = false;
     suppressFollowRef.current = false;
     allReadBottomRef.current = false;
+    allReadSettleUntilRef.current = Date.now() + 2500;
     readyToMarkRef.current = false;
     if (readyTimerRef.current) clearTimeout(readyTimerRef.current);
   }
@@ -288,26 +296,62 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
   }, [formattedMessages, chatuserId]);
 
-  // Keep scroll at bottom for "all read" chats after background sync grows the list
+  // Keep scroll pinned to bottom for "all read" chats.
+  // Cached chats swap formattedMessages up to 3x (cached → newer-sync → full-sync)
+  // and media loads async — each reflow can strand the view mid-list. The old
+  // guard only re-scrolled when the list GREW, so the final full-sync swap (same
+  // length) left the view stranded. Now we re-assert bottom on every swap during
+  // the initial settle window, and afterwards only when the list grows (new msgs).
+  // The double timer covers the two reflow sources: the array swap and late media.
   useEffect(() => {
     if (!allReadBottomRef.current) return;
     if (formattedMessages.length === 0) return;
     const lastIndex = formattedMessages.length - 1;
-    if (
-      initialUnreadRef.current !== null &&
-      initialUnreadRef.current < lastIndex
-    ) {
-      initialUnreadRef.current = lastIndex;
-      const timer = setTimeout(() => {
-        virtuosoRef.current?.scrollToIndex({
-          index: "LAST",
-          align: "end",
-          behavior: "auto",
-        });
-      }, 50);
-      return () => clearTimeout(timer);
-    }
+    const withinSettle = Date.now() < allReadSettleUntilRef.current;
+    const grew =
+      initialUnreadRef.current !== null && initialUnreadRef.current < lastIndex;
+    if (!grew && !withinSettle) return;
+
+    initialUnreadRef.current = lastIndex;
+    const toBottom = () =>
+      virtuosoRef.current?.scrollToIndex({
+        index: "LAST",
+        align: "end",
+        behavior: "auto",
+      });
+    const t1 = setTimeout(toBottom, 50);
+    const t2 = setTimeout(toBottom, 300);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [formattedMessages]);
+
+  // True remaining-unread count for THIS chat. The store cascades reads
+  // (UPDATE_READ_STATUS marks every message up to the read one as read), so this
+  // ticks down as the user scrolls the viewport — it does not jump to 0 on entry.
+  const remainingUnreadCount = useMemo(
+    () =>
+      formattedMessages.reduce(
+        (n: number, m: any) =>
+          n +
+          (m.type === "message" &&
+          m.unread === 1 &&
+          String(m.senderChatuserId) !== String(chatuserId)
+            ? 1
+            : 0),
+        0
+      ),
+    [formattedMessages, chatuserId]
+  );
+
+  // Push the live count to the sidebar badge whenever it changes. Skip while the
+  // list is empty/loading (chat-switch clears it briefly) so we don't flash the
+  // badge to 0 before the messages reload.
+  useEffect(() => {
+    if (!isMsgApiCall || formattedMessages.length === 0) return;
+    onUnreadCountChange?.(remainingUnreadCount);
+  }, [remainingUnreadCount, onUnreadCountChange, isMsgApiCall, formattedMessages.length]);
 
   // Live unread index for unread label rendering
   const liveFirstUnreadIndex = useMemo(() => {
@@ -617,7 +661,13 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
         style={{ width: "100%", height: "100%", overflowX: "hidden" }}
         data={formattedMessages}
         firstItemIndex={firstItemIndex}
-        initialTopMostItemIndex={forceScrollIndex ?? firstUnreadIndex}
+        initialTopMostItemIndex={
+          forceScrollIndex != null
+            ? forceScrollIndex
+            : allReadBottomRef.current
+              ? { index: firstUnreadIndex, align: "end" }
+              : firstUnreadIndex
+        }
         alignToBottom
         overscan={400}
         increaseViewportBy={{ top: 600, bottom: 200 }}

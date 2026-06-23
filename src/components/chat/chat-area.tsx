@@ -276,6 +276,25 @@ export function ChatArea() {
     [emit]
   );
 
+  // Sync the sidebar unread badge to the chat's real remaining-unread count as
+  // the user reads through the viewport. The store cascades reads (UPDATE_READ_STATUS
+  // marks all messages up to the read one), so MessageList reports the true
+  // remaining count and the badge ticks down instead of jumping to 0 on entry.
+  const handleUnreadCountChange = useCallback(
+    (count: number) => {
+      const tid = talkId;
+      if (!tid) return;
+      setUserList((prev: any[]) =>
+        prev.map((u: any) =>
+          u.talkId === tid && (u.unreadCount || 0) !== count
+            ? { ...u, unreadCount: count }
+            : u
+        )
+      );
+    },
+    [talkId, setUserList]
+  );
+
   // ── Delete message ──
 
   const deleteMessage = useCallback(
@@ -810,6 +829,7 @@ export function ChatArea() {
           isSelectionMode={isSelectionMode}
           selectedMessages={selectedMessages}
           readMessagesApi={readMessagesApi}
+          onUnreadCountChange={handleUnreadCountChange}
           onToggleReaction={handleToggleReaction}
           onTogglePin={handleTogglePin}
         />

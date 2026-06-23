@@ -311,10 +311,22 @@ export function ChatSidebar() {
     },
   });
 
+  // Always read the currently-open chat so socket updates use the latest value
+  const activeTalkIdRef = useRef(talkIdState);
+  activeTalkIdRef.current = talkIdState;
+
   const updateUserList = useCallback(
     (newMessage: any) => {
       setUserList((prev: any[]) => {
         const talkId = newMessage.talkId;
+        const isActiveChat = talkId === activeTalkIdRef.current;
+        // For the chat the user is currently viewing, MessageList owns the unread
+        // count (it ticks it down as the viewport marks messages read). Don't let
+        // the server's talkUpdated value clobber that — preserve the local count.
+        const prevEntry = prev.find((u) => u.talkId === talkId);
+        const entry = isActiveChat
+          ? { ...newMessage, unreadCount: prevEntry?.unreadCount ?? 0 }
+          : newMessage;
         const newSendAt = newMessage?.lastMessage?.sendAt
           ? new Date(newMessage.lastMessage.sendAt).getTime()
           : newMessage?.created
@@ -332,13 +344,13 @@ export function ChatSidebar() {
               ? new Date(existing.created).getTime()
               : 0;
           if (existingSendAt === newSendAt) {
-            updated[idx] = newMessage;
+            updated[idx] = entry;
           } else {
             updated.splice(idx, 1);
-            updated.push(newMessage);
+            updated.push(entry);
           }
         } else {
-          updated.push(newMessage);
+          updated.push(entry);
         }
 
         return sortChatList(updated);
