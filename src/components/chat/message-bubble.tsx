@@ -15,6 +15,7 @@ import {
   SmilePlus,
   Pin,
   PinOff,
+  Ban,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -317,6 +318,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onTogglePin,
 }) => {
   const [imgError, setImgError] = useState(false);
+  // Orientation of the standalone image, measured on load. Landscape images
+  // render as a full-width rectangle at natural aspect; portrait/square images
+  // render inside a fixed square box with a color fill.
+  const [imgOrientation, setImgOrientation] = useState<"portrait" | "landscape" | null>(null);
+  const [vidOrientation, setVidOrientation] = useState<"portrait" | "landscape" | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reactionDetailOpen, setReactionDetailOpen] = useState(false);
   const [reactionBarOpen, setReactionBarOpen] = useState(false);
@@ -448,16 +454,34 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     if (imgError) {
       return <FallbackImage isSender={isSender} />;
     }
+    const isLandscape = imgOrientation === "landscape";
     return (
       <div
-        className="cursor-pointer overflow-hidden"
+        className={cn(
+          "relative cursor-pointer overflow-hidden",
+          isLandscape
+            ? // Landscape: full-width rectangle at natural aspect ratio
+              "max-w-[360px]"
+            : // Portrait / square: fixed square box with color fill
+              "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
+        )}
         onClick={() => onMediaClick(path, "image")}
       >
         <img
           src={path}
           alt="Uploaded"
-          className="h-[150px] w-[150px] object-cover"
+          className={cn(
+            isLandscape ? "h-auto w-full" : "h-full w-full object-contain"
+          )}
           loading="lazy"
+          onLoad={(e) => {
+            const img = e.currentTarget;
+            if (img.naturalWidth && img.naturalHeight) {
+              setImgOrientation(
+                img.naturalWidth > img.naturalHeight ? "landscape" : "portrait"
+              );
+            }
+          }}
           onError={() => setImgError(true)}
         />
       </div>
@@ -465,16 +489,34 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   }
 
   function renderVideo(path: string) {
+    const isLandscape = vidOrientation === "landscape";
     return (
       <div
-        className="group/vid relative cursor-pointer overflow-hidden rounded-xl"
+        className={cn(
+          "group/vid relative cursor-pointer overflow-hidden rounded-xl",
+          isLandscape
+            ? // Landscape: full-width rectangle at natural aspect ratio
+              "max-w-[360px]"
+            : // Portrait / square: fixed square box with color fill
+              "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
+        )}
         onClick={() => onMediaClick(path, "video")}
       >
         <video
           src={path}
           muted
           preload="metadata"
-          className="h-[150px] w-[150px] object-cover"
+          className={cn(
+            isLandscape ? "h-auto w-full" : "h-full w-full object-contain"
+          )}
+          onLoadedMetadata={(e) => {
+            const vid = e.currentTarget;
+            if (vid.videoWidth && vid.videoHeight) {
+              setVidOrientation(
+                vid.videoWidth > vid.videoHeight ? "landscape" : "portrait"
+              );
+            }
+          }}
         />
         <div className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary/80 backdrop-blur-sm transition-transform group-hover/vid:scale-110">
           <Play className="ml-0.5 h-4 w-4 fill-white text-white" />
@@ -518,6 +560,44 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   // ── Bubble content ──
 
   function renderBubbleContent() {
+    // Deleted message → tombstone placeholder (WhatsApp-style)
+    if (message.isDeleted) {
+      return (
+        <div
+          className={cn(
+            "overflow-hidden rounded-2xl",
+            isSender
+              ? "rounded-tr-[4px] bubble-sent"
+              : "rounded-tl-[4px] bubble-recv"
+          )}
+        >
+          <div className="flex items-center gap-2 px-3.5 py-2.5">
+            <Ban
+              className={cn(
+                "h-4 w-4 shrink-0",
+                isSender ? "text-white/60" : "text-muted-foreground/60"
+              )}
+            />
+            <span
+              className={cn(
+                "text-[13.5px] italic",
+                isSender ? "text-white/70" : "text-muted-foreground/70"
+              )}
+            >
+              {isSender
+                ? "You deleted this message"
+                : "This message was deleted"}
+            </span>
+            <BubbleTimestamp
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+            />
+          </div>
+        </div>
+      );
+    }
+
     const forwardedLabel = message.forwardFromMessageId && (
       <div
         className={cn(
@@ -546,11 +626,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       return (
         <div
           className={cn(
-            "relative overflow-hidden rounded-2xl",
-            isSender ? "rounded-tr-[6px]" : "rounded-tl-[6px]",
+            "relative overflow-hidden rounded-2xl [.dark_&]:shadow-none!",
+            isSender ? "rounded-tr-[4px]" : "rounded-tl-[4px]",
             isSelected && "ring-2 ring-primary/40"
           )}
-          style={isSender ? { boxShadow: '0 2px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)' } : { boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}
+          style={isSender ? { boxShadow: '0 2px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)' } : { boxShadow: '0 2px 10px rgba(0,0,0,0.15)' }}
           onClick={isSelectionMode ? () => onSelect(message) : undefined}
         >
           {renderImage(mediaPath)}
@@ -570,8 +650,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           className={cn(
             "overflow-hidden rounded-2xl",
             isSender
-              ? "rounded-tr-[6px] bubble-sent"
-              : "rounded-tl-[6px] bubble-recv",
+              ? "rounded-tr-[4px] bubble-sent"
+              : "rounded-tl-[4px] bubble-recv",
             isSelected && "ring-2 ring-primary/40"
           )}
           onClick={isSelectionMode ? () => onSelect(message) : undefined}
@@ -616,8 +696,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         className={cn(
           "overflow-hidden rounded-2xl",
           isSender
-            ? "rounded-tr-[6px] bubble-sent"
-            : "rounded-tl-[6px] bubble-recv",
+            ? "rounded-tr-[4px] bubble-sent"
+            : "rounded-tl-[4px] bubble-recv",
           isSelected && "ring-2 ring-primary/40"
         )}
         onClick={isSelectionMode ? () => onSelect(message) : undefined}
@@ -753,7 +833,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
       {/* Bubble column — only this part triggers the context menu */}
       <ContextMenu>
-        <ContextMenuTrigger asChild disabled={isSelectionMode}>
+        <ContextMenuTrigger asChild disabled={isSelectionMode || message.isDeleted}>
           <div className="group relative min-w-0 max-w-[55%]">
             {/* Bubble + sender name — w-fit so only bubble content sets width */}
             <div className={cn(
@@ -772,7 +852,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 {renderBubbleContent()}
 
                 {/* Add reaction button at bottom corner — show on hover OR when bar is open */}
-                {!message.reactions?.length && !isSelectionMode && (
+                {!message.reactions?.length && !isSelectionMode && !message.isDeleted && (
                   <div className={cn(
                     "absolute -bottom-2.5 z-[2] opacity-0 transition-opacity group-hover:opacity-100",
                     reactionBarOpen && "opacity-100",
@@ -790,7 +870,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             </div>
 
             {/* Reactions row — outside w-fit so it doesn't expand the bubble */}
-            {message.reactions?.length > 0 && (
+            {message.reactions?.length > 0 && !message.isDeleted && (
               <div className={cn(
                 "flex flex-wrap items-center gap-1 mt-0.5",
                 isSender ? "justify-end mr-1" : "ml-1"
@@ -865,7 +945,8 @@ function areEqual(
     prev.isSelectionMode === next.isSelectionMode &&
     prev.showSenderInfo === next.showSenderInfo &&
     prev.message.reactions === next.message.reactions &&
-    prev.message.isPinned === next.message.isPinned
+    prev.message.isPinned === next.message.isPinned &&
+    prev.message.isDeleted === next.message.isDeleted
   );
 }
 

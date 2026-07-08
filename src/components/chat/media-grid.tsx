@@ -109,9 +109,11 @@ function MediaGrid({
 
   // Determine cell sizing based on count
   function getCellClass(idx: number) {
-    if (total === 1) return "h-[200px] w-[200px]";
+    if (total === 1) return "aspect-square w-[200px]";
+    // The first tile of a 3-item group is a full-width banner
     if (total === 3 && idx === 0) return "h-[150px] w-full";
-    return "h-[150px] w-full";
+    // All other tiles are proper squares
+    return "aspect-square w-full";
   }
 
   // Determine if cell should span 2 columns
@@ -124,14 +126,14 @@ function MediaGrid({
   const gridContent = (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl",
-        isSender ? "rounded-tr-[6px]" : "rounded-tl-[6px]",
+        "relative w-[300px] max-w-full overflow-hidden rounded-2xl [.dark_&]:shadow-none!",
+        isSender ? "rounded-tr-[4px]" : "rounded-tl-[4px]",
         isSelected && "ring-2 ring-primary/40"
       )}
       style={
         isSender
           ? { boxShadow: "0 2px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)" }
-          : { boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }
+          : { boxShadow: "0 2px 10px rgba(0,0,0,0.15)" }
       }
       onClick={isSelectionMode ? () => onSelectMultiple(messages) : undefined}
     >
@@ -150,7 +152,8 @@ function MediaGrid({
             <div
               key={msg.messageId}
               className={cn(
-                "relative cursor-pointer overflow-hidden bg-black/5 dark:bg-white/5",
+                "relative cursor-pointer overflow-hidden bg-black/15 [.dark_&]:bg-white/5",
+                cellClass,
                 span && "col-span-2"
               )}
               onClick={
@@ -169,10 +172,10 @@ function MediaGrid({
                     src={msg.mediaPath}
                     muted
                     preload="metadata"
-                    className={cn("object-cover", cellClass)}
+                    className="h-full w-full object-contain"
                   />
                   <div
-                    className="absolute left-1/2 top-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary/80 backdrop-blur-sm transition-transform hover:scale-110"
+                    className="absolute left-1/2 top-1/2 z-[2] flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary/80 backdrop-blur-sm transition-transform hover:scale-110"
                   >
                     <Play className="ml-0.5 h-3.5 w-3.5 fill-white text-white" />
                   </div>
@@ -182,13 +185,13 @@ function MediaGrid({
                   src={msg.mediaPath}
                   alt=""
                   loading="lazy"
-                  className={cn("object-cover", cellClass)}
+                  className="h-full w-full object-contain"
                 />
               )}
 
               {/* +N overlay on the 4th item */}
               {showCountOverlay && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                <div className="absolute inset-0 z-[3] flex items-center justify-center bg-black/50">
                   <span className="text-2xl font-bold text-white">
                     +{extraCount}
                   </span>

@@ -32,7 +32,8 @@ export default function useMediaLightbox(formattedMessages: any[]) {
             : msg.mediaPath;
           return (
             (effectiveType === "IMAGE" || effectiveType === "VIDEO") &&
-            effectivePath
+            effectivePath &&
+            !msg.isDeleted
           );
         })
         .map((msg): MediaSlide => {

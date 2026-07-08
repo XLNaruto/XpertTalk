@@ -214,8 +214,8 @@ const ReplyAllBubble: React.FC<ReplyAllBubbleProps> = ({
                   className={cn(
                     "overflow-hidden rounded-2xl",
                     isSender
-                      ? "rounded-tr-[6px] bubble-sent"
-                      : "rounded-tl-[6px] bubble-recv",
+                      ? "rounded-tr-[4px] bubble-sent"
+                      : "rounded-tl-[4px] bubble-recv",
                     isSelected && "ring-2 ring-primary/40"
                   )}
                   onClick={

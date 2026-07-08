@@ -61,6 +61,7 @@ function computeMediaGroups(messages: any[]): Map<string, { messages: any[]; isF
     const isMedia =
       (msg.messageType === "IMAGE" || msg.messageType === "VIDEO") &&
       msg.mediaPath &&
+      !msg.isDeleted &&
       !msg.replyToMessageId &&
       !msg.forwardFromMessageId;
 
@@ -112,6 +113,7 @@ function computeReplyAllGroups(messages: any[]): Map<string, { messages: any[]; 
 
     const isMediaReply =
       msg.messageType === "TEXT" &&
+      !msg.isDeleted &&
       msg.replyToMessageId &&
       !msg.forwardFromMessageId &&
       msg.messageText &&

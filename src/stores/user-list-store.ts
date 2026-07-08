@@ -9,6 +9,7 @@ interface UserListStore {
   setReceiverData: (data: any) => void;
   getUserList: () => Promise<void>;
   getUserProfile: (talkId: string) => Promise<any | null>;
+  applyPresence: (statuses: { chatuserId: number | string; isActive: boolean }[]) => void;
 }
 
 // userStage removed — endpoints now use common prefix
@@ -36,6 +37,23 @@ export const useUserListStore = create<UserListStore>((set, get) => ({
       set({ isLoading: false });
     }
   },
+
+  applyPresence: (statuses) => set((state) => {
+    if (!statuses?.length) return {};
+    const statusMap = new Map(statuses.map((s) => [String(s.chatuserId), s.isActive]));
+    let changed = false;
+    const next = state.userList.map((u) => {
+      if (u.talkType === 'PRIVATE' && statusMap.has(String(u.receiverId))) {
+        const active = statusMap.get(String(u.receiverId));
+        if (u.isActive !== active) {
+          changed = true;
+          return { ...u, isActive: active };
+        }
+      }
+      return u;
+    });
+    return changed ? { userList: next } : {};
+  }),
 
   getUserProfile: async (talkId: string) => {
     const response: any = await getData(

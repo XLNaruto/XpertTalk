@@ -269,6 +269,7 @@ export function ChatSidebar() {
   const userList = useUserListStore((s) => s.userList);
   const setUserList = useUserListStore((s) => s.setUserList);
   const getUserList = useUserListStore((s) => s.getUserList);
+  const applyPresence = useUserListStore((s) => s.applyPresence);
   const isUserListLoading = useUserListStore((s) => s.isLoading);
 
   const closeSearchOnMsg = useUIStore((s) => s.closeSearchOnMsg);
@@ -399,6 +400,57 @@ export function ChatSidebar() {
     getUserList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Presence polling (solo chats, every 30s) ──
+  // Collect every PRIVATE chat's receiver chatuserId and poll their online status.
+  const soloChatuserIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          userList
+            .filter((u: any) => u.talkType === "PRIVATE" && u.receiverId)
+            .map((u: any) => u.receiverId),
+        ),
+      ),
+    [userList],
+  );
+  // Stable key so the interval only resets when the set of ids actually changes,
+  // not on every unrelated userList update (new message, unread tick, etc.).
+  const soloIdsKey = soloChatuserIds.join(",");
+  const soloIdsRef = useRef<any[]>(soloChatuserIds);
+  soloIdsRef.current = soloChatuserIds;
+
+  useEffect(() => {
+    if (soloIdsRef.current.length === 0) return;
+
+    let cancelled = false;
+    const fetchPresence = async () => {
+      try {
+        const response: any = await postData(
+          "chat/talk/presence",
+          { chatuserIds: soloIdsRef.current },
+          apiHeader(false, 0),
+        );
+        if (
+          !cancelled &&
+          String(response?.status) === "200" &&
+          String(response?.data.status) === "200"
+        ) {
+          applyPresence(response.data.data || []);
+        }
+      } catch (error) {
+        logger.error("Presence fetch failed:", error);
+      }
+    };
+
+    fetchPresence();
+    const interval = setInterval(fetchPresence, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soloIdsKey, applyPresence]);
 
   // ── Search ──
   const getSearchUserList = async (search: string = "") => {

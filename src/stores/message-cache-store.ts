@@ -113,7 +113,10 @@ function applyMessageAction(messages: any[], action: MessageAction): any[] {
         m.messageId === action.payload.messageId
           ? { ...m, messageText: action.payload.messageText, updated: new Date().toISOString() } : m);
     case 'DELETE_MESSAGE':
-      return messages.filter(m => m.messageId !== action.payload);
+      // Keep the message but flag it so the bubble renders a
+      // "This message was deleted" placeholder (WhatsApp-style)
+      return messages.map(m =>
+        m.messageId === action.payload ? { ...m, isDeleted: true } : m);
     case 'UPDATE_READ_STATUS': {
       const targetIdx = messages.findIndex(m => m.messageId === action.payload.messageId);
       if (targetIdx < 0) return messages;
