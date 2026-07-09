@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect } from "react";
-import { Forward, Pin, Trash2 } from "lucide-react";
+import { Ban, Forward, Pin, Trash2 } from "lucide-react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -82,12 +82,29 @@ const ChatListItemInner: React.FC<ChatListItemProps> = ({
 
   const handleClick = useCallback(() => onSelect(data), [onSelect, data]);
 
+  const isDeletedLastMessage =
+    messageType !== "Draft" && data?.lastMessage?.isDeleted === true;
+
   const renderPreview = () => {
     if (messageType === "Draft") {
       return (
         <span className="flex items-center gap-1 truncate">
           <span className="shrink-0 font-semibold text-emerald-500">Draft:</span>
           <span className="truncate" dangerouslySetInnerHTML={{ __html: formatPreview(displayMessage) }} />
+        </span>
+      );
+    }
+
+    // Deleted message → tombstone placeholder (WhatsApp-style)
+    if (isDeletedLastMessage) {
+      return (
+        <span className="flex items-center gap-1 truncate italic text-muted-foreground/60">
+          <Ban className="h-3 w-3 shrink-0" />
+          <span className="truncate pr-0.5">
+            {isSelfLastMessage
+              ? "You deleted this message"
+              : "This message was deleted"}
+          </span>
         </span>
       );
     }
@@ -170,13 +187,13 @@ const ChatListItemInner: React.FC<ChatListItemProps> = ({
             <div className="mt-0.5 flex items-center justify-between gap-2">
               <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                 <span className="flex items-center gap-1 truncate">
-                  {/* Self: "You:" | Group + other: sender avatar (skip for forwarded) */}
-                  {messageType !== "Draft" && data?.lastMessage && !data?.lastMessage?.forwardFromMessageId && (
+                  {/* Self: "You:" | Group + other: sender avatar (skip for forwarded/deleted) */}
+                  {messageType !== "Draft" && data?.lastMessage && !data?.lastMessage?.forwardFromMessageId && !isDeletedLastMessage && (
                     isSelfLastMessage ? (
                       <span className="shrink-0 font-semibold text-primary/70">You:</span>
                     ) : null
                   )}
-                  {data?.lastMessage?.isEdited == true && !(draft?.message?.trim() || (draft?.attachments && draft.attachments.length > 0)) && (
+                  {data?.lastMessage?.isEdited == true && !isDeletedLastMessage && !(draft?.message?.trim() || (draft?.attachments && draft.attachments.length > 0)) && (
                     <span className="shrink-0 text-[11px] italic text-muted-foreground/60">Edited</span>
                   )}
                   {renderPreview()}
