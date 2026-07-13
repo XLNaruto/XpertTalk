@@ -79,7 +79,8 @@ export default function useMessageSelection({
 
   const canDeleteSelected = selectedMessages.every(
     (msg: any) =>
-      String(msg.senderChatuserId) === String(chatuserId)
+      String(msg.senderChatuserId) === String(chatuserId) &&
+      Date.now() - new Date(msg.created).getTime() < 24 * 60 * 60 * 1000
   );
 
   return {

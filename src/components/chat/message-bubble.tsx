@@ -371,6 +371,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     toast.success("Copied to clipboard");
   };
 
+  // Hide Edit/Delete once the message is older than 24 hours
+  const isWithin24Hours =
+    Date.now() - new Date(message.created).getTime() < 24 * 60 * 60 * 1000;
+
   // ── Context menu items ──
 
   const contextMenuContent = (
@@ -403,7 +407,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           >
             <Copy className="h-4 w-4" /> Copy
           </ContextMenuItem>
-          {isSender && !message.forwardFromMessageId && (
+          {isSender && !message.forwardFromMessageId && isWithin24Hours && (
             <ContextMenuItem
               onClick={() => onEdit(message)}
               className="gap-2 rounded-lg px-2.5 py-2 text-sm"
@@ -437,7 +441,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           ? <><PinOff className="h-4 w-4" /> Unpin</>
           : <><Pin className="h-4 w-4" /> Pin</>}
       </ContextMenuItem>
-      {isSender && (
+      {isSender && isWithin24Hours && (
         <ContextMenuItem
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
           onClick={() => setDeleteConfirmOpen(true)}
@@ -822,7 +826,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         ))}
 
       {/* Selection checkbox */}
-      {isSelectionMode && (
+      {isSelectionMode && !message.isDeleted && (
         <div className="mt-2 shrink-0">
           <SelectionCheckbox
             isSelected={isSelected}
