@@ -53,7 +53,7 @@ export function ReactionDetailsDialog({
         </DialogHeader>
 
         {/* Emoji tabs */}
-        <div className="flex gap-1 overflow-x-auto px-4 py-2 scrollbar-none">
+        <div className="flex flex-wrap gap-1 px-4 py-2">
           <button
             onClick={() => setActiveTab("all")}
             className={cn(

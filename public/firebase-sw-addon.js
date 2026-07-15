@@ -51,6 +51,7 @@ self.addEventListener("push", (event) => {
         const payload = pushPayload;
         const notification = payload.notification || {};
         const data = payload.data || {};
+        console.log("[firebase-sw] showNotification data:", JSON.stringify(data), data);
         const title = notification.title || data.title || "New Message";
         const options = {
           body: notification.body || data.body || "",
@@ -80,23 +81,34 @@ function encodeFcmData(data) {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
+  console.log("[firebase-sw] notificationclick data:", JSON.stringify(data), data);
   // Deep-link URL used only when no app window is open. The client reads the
   // `fcm` param (base64 JSON) to select the chat on load.
   const target = `${BASE}/chats?fcm=${encodeFcmData(data)}`;
+  console.log("[firebase-sw] notificationclick target:", target);
 
   event.waitUntil(
     clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
+        console.log(
+          "[firebase-sw] BASE:",
+          BASE,
+          "| clients:",
+          clientList.map((c) => ({ url: c.url, focused: c.focused, vis: c.visibilityState }))
+        );
         // Reuse an already-open app window: focus it and tell the running app
         // to switch to this chat — no full reload, preserves socket/state.
         const appClient = clientList.find((c) => c.url.includes(BASE));
         if (appClient) {
+          console.log("[firebase-sw] branch=postMessage OPEN_CHAT ->", appClient.url);
           return appClient.focus().then((c) => {
             (c || appClient).postMessage({ type: "OPEN_CHAT", data });
+            console.log("[firebase-sw] posted OPEN_CHAT");
           });
         }
         // Nothing open — launch the app/PWA at the deep-linked chat.
+        console.log("[firebase-sw] branch=openWindow ->", target);
         if (clients.openWindow) {
           return clients.openWindow(target);
         }

@@ -3,8 +3,10 @@ import { useChatStore } from "@/stores/chat-store";
 import { useUserListStore } from "@/stores/user-list-store";
 import useIsMobile from "@/hooks/use-is-mobile";
 import { ChatLayout } from "@/components/chat/chat-layout";
+import { useNavigate, useLocation } from "react-router-dom";
 import {
   decryptUrlData,
+  encryptUrlData,
 } from "@/lib/encryption";
 import { apiHeader, postData } from "@/lib/api-helper";
 import logger from "@/lib/logger";
@@ -42,16 +44,24 @@ function InitChat() {
   const talkIdState = useChatStore((s) => s.activeChat.talkId);
   const { getUserList, receiverData } = useUserListStore();
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [showNotifBanner, setShowNotifBanner] = useState(false);
 
-  // URL params
+  // URL params — read reactively via useLocation so that in-app navigation
+  // (e.g. a notification click posting OPEN_CHAT) re-feeds these values and the
+  // hydration effects below stay in sync instead of clobbering with stale data.
   const queryParams = new URLSearchParams(location.search);
   const decryptedData: any = decryptUrlData(queryParams.get("data"));
   // Notification deep-link: SW passes the FCM payload as base64 JSON in `fcm`.
   // Merged on top of the encrypted `data` param (only one is present normally).
   const fcmData: any = decodeFcmParam(queryParams.get("fcm"));
   const mergedData = { ...(decryptedData || {}), ...(fcmData || {}) };
+  if (queryParams.get("fcm")) {
+    logger.info("[fcm deep-link] decoded:", fcmData);
+    logger.info("[fcm deep-link] merged:", mergedData);
+  }
   const {
     talkId: urlTalkId,
     receiverId: urlReceiverId,
@@ -255,7 +265,9 @@ function InitChat() {
     const handler = (event: MessageEvent) => {
       if (event.data?.type !== "OPEN_CHAT") return;
       const d = normalizeNotifData(event.data.data);
-      setActiveChat({
+      logger.info("[OPEN_CHAT] raw:", event.data.data);
+      logger.info("[OPEN_CHAT] normalized:", d);
+      const chat = {
         talkId: d.talkId || "",
         receiverId: d.receiverId || "",
         receiverType: d.receiverType || "",
@@ -264,12 +276,17 @@ function InitChat() {
         talkName: d.talkName || "",
         isActive: d.isActive || false,
         isGroupAdmin: d.isGroupAdmin || false,
-      });
+      };
+      setActiveChat(chat);
       if (d.messageId) setDeepLinkMessageId(String(d.messageId));
+      // Sync the URL to the selected chat. Because URL params are now read via
+      // useLocation, this re-runs the hydration effects with the correct chat
+      // instead of letting a stale `data`/`fcm` param revert the selection.
+      navigate(`/chats/?data=${encryptUrlData(chat)}`, { replace: true });
     };
     navigator.serviceWorker.addEventListener("message", handler);
     return () => navigator.serviceWorker.removeEventListener("message", handler);
-  }, [setActiveChat, setDeepLinkMessageId]);
+  }, [setActiveChat, setDeepLinkMessageId, navigate]);
 
   // Window focus/blur + visibility change listeners
   useEffect(() => {
