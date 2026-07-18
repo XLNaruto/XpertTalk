@@ -55,10 +55,18 @@ type MessageAction =
 const START_INDEX = 1_000_000;
 // userStage removed — endpoints now use common prefix
 
+// A message deleted by an admin (senderType "ADMIN") is removed from the chat
+// entirely — no "This message was deleted" tombstone — in BOTH the admin and
+// employee apps. Messages deleted by an employee still show the tombstone.
+function isAdminDeleted(m: any): boolean {
+  return m.isDeleted && m.senderType === 'ADMIN';
+}
+
 // ── Pure helpers ──────────────────────────────────────────────
 
 function formatMessagesWithDates(messages: any[]): any[] {
-  if (!messages.length) return [];
+  const source = messages.filter((m) => !isAdminDeleted(m));
+  if (!source.length) return [];
   const result: any[] = [];
   let lastDate = '';
   const now = new Date();
@@ -66,7 +74,7 @@ function formatMessagesWithDates(messages: any[]): any[] {
   const yesterday = format(subDays(now, 1), 'yyyy-MM-dd');
   const oneWeekAgo = subDays(now, 7);
 
-  for (const message of messages) {
+  for (const message of source) {
     const messageDate = format(new Date(message.created), 'yyyy-MM-dd');
     if (lastDate !== messageDate) {
       let dateLabel: string;
@@ -84,17 +92,21 @@ function formatMessagesWithDates(messages: any[]): any[] {
 }
 
 function countFormattedPrependItems(newMsgs: any[], existingMsgs: any[]): number {
-  if (!newMsgs.length) return 0;
+  // Match the filtering done in formatMessagesWithDates so the Virtuoso scroll
+  // anchor stays aligned when an older page contains admin-deleted messages.
+  const src = newMsgs.filter((m) => !isAdminDeleted(m));
+  const existing = existingMsgs.filter((m) => !isAdminDeleted(m));
+  if (!src.length) return 0;
   let count = 0;
   let lastDate = '';
-  for (const msg of newMsgs) {
+  for (const msg of src) {
     const d = format(new Date(msg.created), 'yyyy-MM-dd');
     if (lastDate !== d) { count++; lastDate = d; }
     count++;
   }
-  if (existingMsgs.length > 0) {
-    const lastNew = format(new Date(newMsgs[newMsgs.length - 1].created), 'yyyy-MM-dd');
-    const firstExist = format(new Date(existingMsgs[0].created), 'yyyy-MM-dd');
+  if (existing.length > 0) {
+    const lastNew = format(new Date(src[src.length - 1].created), 'yyyy-MM-dd');
+    const firstExist = format(new Date(existing[0].created), 'yyyy-MM-dd');
     if (lastNew === firstExist) count--;
   }
   return count;

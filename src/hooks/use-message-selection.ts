@@ -77,10 +77,13 @@ export default function useMessageSelection({
     setSelectedMessages([]);
   }, []);
 
+  // Admins are exempt from the 24-hour window; the restriction is employee-only.
+  const isAdmin = (import.meta.env.VITE_APP_USER || "employee") === "admin";
   const canDeleteSelected = selectedMessages.every(
     (msg: any) =>
       String(msg.senderChatuserId) === String(chatuserId) &&
-      Date.now() - new Date(msg.created).getTime() < 24 * 60 * 60 * 1000
+      (isAdmin ||
+        Date.now() - new Date(msg.created).getTime() < 24 * 60 * 60 * 1000)
   );
 
   return {

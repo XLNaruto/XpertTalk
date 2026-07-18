@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import logger from "@/lib/logger";
 import { toast } from "sonner";
 import { apiHeader, postData } from "@/lib/api-helper";
+import { encodeBitmapToBlob } from "@/lib/image-encode";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -33,12 +34,103 @@ const IMAGE_TYPES = [
   "image/bmp",
   "image/webp",
   "image/svg+xml",
+  "image/heic",
+  "image/heif",
 ];
 
 const ALL_ALLOWED = [...DOC_TYPES, ...VIDEO_TYPES, ...IMAGE_TYPES];
 
 const MAX_DOC_IMAGE_SIZE = 12 * 1024 * 1024; // 12 MB
 const MAX_VIDEO_SIZE = 18 * 1024 * 1024; // 18 MB
+
+// ── HEIC/HEIF handling ────────────────────────────────────────
+// Most browsers (Chrome, Firefox, Edge) can't render HEIC/HEIF in an <img>,
+// so we convert to JPEG on the client before upload. HEIC files also often
+// report an empty MIME type, so we detect by extension as a fallback.
+
+const HEIC_EXT = /\.(heic|heif)$/i;
+
+function isHeicFile(file: File): boolean {
+  return (
+    file.type === "image/heic" ||
+    file.type === "image/heif" ||
+    (file.type === "" && HEIC_EXT.test(file.name))
+  );
+}
+
+// A pasted image can arrive as a URL/text (e.g. browser "Copy image address")
+// rather than file bytes. Detect that and fetch it into a real File.
+const IMAGE_URL_RE =
+  /^https?:\/\/\S+\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)(\?\S*)?$/i;
+
+function isProbableImageUrl(text: string): boolean {
+  return IMAGE_URL_RE.test(text);
+}
+
+async function fetchUrlAsFile(url: string): Promise<File | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob.type.startsWith("image/")) return null;
+    const name = url.split("?")[0].split("/").pop() || "image";
+    return new File([blob], name, { type: blob.type });
+  } catch {
+    return null;
+  }
+}
+
+// Re-encode an oversized image to JPEG so it fits under `maxBytes`. Used for
+// pasted images: the clipboard hands us a large lossless PNG (Chrome only keeps
+// images as PNG), which for a big photo easily exceeds the upload limit even
+// though the original file was small. We shrink quality first, then dimensions.
+async function compressImageToLimit(file: File, maxBytes: number): Promise<File> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    let width = bitmap.width;
+    let height = bitmap.height;
+    const encode = (w: number, h: number, q: number) =>
+      encodeBitmapToBlob(bitmap, w, h, "image/jpeg", q);
+
+    let quality = 0.9;
+    let blob = await encode(width, height, quality);
+    // Drop quality first (keeps full resolution).
+    while (blob.size > maxBytes && quality > 0.5) {
+      quality = Math.round((quality - 0.1) * 10) / 10;
+      blob = await encode(width, height, quality);
+    }
+    // Still too big — scale the dimensions down.
+    while (blob.size > maxBytes && width > 1000) {
+      width = Math.round(width * 0.8);
+      height = Math.round(height * 0.8);
+      blob = await encode(width, height, 0.85);
+    }
+
+    const name = `${file.name.replace(/\.[^.]+$/, "")}.jpg`;
+    return new File([blob], name, {
+      type: "image/jpeg",
+      lastModified: file.lastModified,
+    });
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+async function convertHeicToJpeg(file: File): Promise<File> {
+  // Dynamic import keeps the heavy libheif wasm out of the main bundle.
+  const { default: heic2any } = await import("heic2any");
+  const result = await heic2any({
+    blob: file,
+    toType: "image/jpeg",
+    quality: 0.9,
+  });
+  const blob = Array.isArray(result) ? result[0] : result;
+  const newName = `${file.name.replace(HEIC_EXT, "")}.jpg`;
+  return new File([blob], newName, {
+    type: "image/jpeg",
+    lastModified: file.lastModified,
+  });
+}
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -85,12 +177,68 @@ export default function useFileUpload({
 
   // ── Actions ──
 
-  const addFiles = useCallback((newFiles: File[]) => {
+  const addFiles = useCallback(async (
+    newFiles: File[],
+    opts?: { compressOversizedImages?: boolean }
+  ) => {
+    // Convert any HEIC/HEIF files to JPEG first so they display in all browsers.
+    let incomingFiles = newFiles;
+    if (newFiles.some(isHeicFile)) {
+      const toastId = toast.loading("Please wait…");
+      const failedConversions: string[] = [];
+      const converted = await Promise.all(
+        newFiles.map(async (file) => {
+          if (!isHeicFile(file)) return file;
+          try {
+            return await convertHeicToJpeg(file);
+          } catch (error) {
+            logger.error("HEIC conversion failed:", file.name, error);
+            failedConversions.push(file.name);
+            return null;
+          }
+        })
+      );
+      toast.dismiss(toastId);
+      incomingFiles = converted.filter((f): f is File => f !== null);
+      if (failedConversions.length > 0) {
+        toast.error(
+          `Could not convert the following images:\n- ${failedConversions.join(
+            "\n- "
+          )}`
+        );
+      }
+    }
+
+    // Rescue oversized images (e.g. a big PNG pasted from the clipboard) by
+    // re-encoding them to JPEG so they fit under the image size limit.
+    if (opts?.compressOversizedImages) {
+      const needsCompress = incomingFiles.some(
+        (f) => f.type.startsWith("image/") && f.size > MAX_DOC_IMAGE_SIZE
+      );
+      if (needsCompress) {
+        const toastId = toast.loading("Please wait…");
+        incomingFiles = await Promise.all(
+          incomingFiles.map(async (file) => {
+            if (!file.type.startsWith("image/") || file.size <= MAX_DOC_IMAGE_SIZE) {
+              return file;
+            }
+            try {
+              return await compressImageToLimit(file, MAX_DOC_IMAGE_SIZE);
+            } catch (error) {
+              logger.error("Image compression failed:", file.name, error);
+              return file; // fall through to the normal size check
+            }
+          })
+        );
+        toast.dismiss(toastId);
+      }
+    }
+
     const validFiles: File[] = [];
     const oversizedFiles: string[] = [];
     const invalidFiles: string[] = [];
 
-    newFiles.forEach((file) => {
+    incomingFiles.forEach((file) => {
       if (!ALL_ALLOWED.includes(file.type)) {
         invalidFiles.push(file.name);
         return;
@@ -232,7 +380,22 @@ export default function useFileUpload({
       });
 
       if (pastedFiles.length > 0) {
-        addFiles(pastedFiles);
+        addFiles(pastedFiles, { compressOversizedImages: true });
+        return;
+      }
+
+      // No file bytes on the clipboard — handle a pasted image URL by fetching
+      // it into a File (so it shows in the preview instead of dropping the raw
+      // link into the input). preventDefault stops the URL text being inserted.
+      const text = event.clipboardData.getData("text/plain")?.trim();
+      if (text && isProbableImageUrl(text)) {
+        event.preventDefault();
+        fetchUrlAsFile(text)
+          .then((file) => {
+            if (file) addFiles([file], { compressOversizedImages: true });
+            else toast.error("Couldn't load the pasted image");
+          })
+          .catch(() => toast.error("Couldn't load the pasted image"));
       }
     },
     [addFiles]

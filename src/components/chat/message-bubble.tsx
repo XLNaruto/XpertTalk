@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { getEncodedCookie } from "@/lib/encryption";
+import { copyImageToClipboard } from "@/lib/copy-image";
 import { QuickReactionsBar } from "@/components/chat/quick-reactions-bar";
 import { MessageReactions } from "@/components/chat/message-reactions";
 import { ReactionDetailsDialog } from "@/components/modals/reaction-details-dialog";
@@ -371,8 +372,24 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     toast.success("Copied to clipboard");
   };
 
-  // Hide Edit/Delete once the message is older than 24 hours
+  const handleCopyImage = async () => {
+    const url = message.forwardFromMessageId
+      ? message?.forwardMessage?.mediaPath
+      : message.mediaPath;
+    if (!url) return;
+    try {
+      await copyImageToClipboard(url);
+      toast.success("Image copied to clipboard");
+    } catch {
+      toast.error("Couldn't copy image");
+    }
+  };
+
+  // Hide Edit/Delete once the message is older than 24 hours.
+  // Admins are exempt from the 24-hour window; the restriction is employee-only.
+  const isAdmin = (import.meta.env.VITE_APP_USER || "employee") === "admin";
   const isWithin24Hours =
+    isAdmin ||
     Date.now() - new Date(message.created).getTime() < 24 * 60 * 60 * 1000;
 
   // ── Context menu items ──
@@ -416,6 +433,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             </ContextMenuItem>
           )}
         </>
+      )}
+      {effectiveType === "IMAGE" && (
+        <ContextMenuItem
+          onClick={handleCopyImage}
+          className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+        >
+          <Copy className="h-4 w-4" /> Copy
+        </ContextMenuItem>
       )}
       {hasMedia && (
         <ContextMenuItem

@@ -15,6 +15,7 @@ export interface MessageListHandle {
   scrollToBottom: () => void;
   scrollToMessage: (messageId: string) => void;
   markAllAsRead: () => void;
+  openAtMessageMarkingRead: (messageId: string) => void;
 }
 
 interface MessageListProps {
@@ -171,6 +172,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   const messages = useMessageCacheStore((s) => s.messages);
   const formattedMessages = useMessageCacheStore((s) => s.formattedMessages);
+  // The chat whose messages are currently loaded. During a chat switch the
+  // `talkId` prop updates a render before the store swaps in the new messages,
+  // so positioning must only run when this matches `talkId` — otherwise it
+  // captures against the PREVIOUS chat's messages and mis-positions the new one.
+  const storeActiveTalkId = useMessageCacheStore((s) => s.activeTalkId);
   const isLoading = useMessageCacheStore((s) => s.isLoading);
   const isMsgApiCall = useMessageCacheStore((s) => s.isMsgApiCall);
   const hasMoreOlder = useMessageCacheStore((s) => s.hasMoreOlder);
@@ -231,7 +237,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     if (readyTimerRef.current) clearTimeout(readyTimerRef.current);
   }
 
-  if (initialUnreadRef.current === null && formattedMessages.length > 0) {
+  if (
+    initialUnreadRef.current === null &&
+    formattedMessages.length > 0 &&
+    storeActiveTalkId === talkId
+  ) {
     const idx = formattedMessages.findIndex(
       (msg: any) =>
         msg.type === "message" &&
@@ -245,6 +255,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       suppressFollowRef.current = true;
     } else {
       allReadBottomRef.current = true;
+      // Start the settle window from when THIS chat's data actually loaded.
+      allReadSettleUntilRef.current = Date.now() + 2500;
     }
   }
 
@@ -252,7 +264,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
 
   // Eagerly suppress followOutput during render when background sync adds unreads
   // (prevents auto-scroll to bottom before the repositioning useEffect can fire)
-  if (!initialPositionDoneRef.current && formattedMessages.length > 0) {
+  if (
+    !initialPositionDoneRef.current &&
+    formattedMessages.length > 0 &&
+    storeActiveTalkId === talkId
+  ) {
     const hasUnreads = formattedMessages.some(
       (msg: any) =>
         msg.type === "message" &&
@@ -279,6 +295,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   useEffect(() => {
     if (initialPositionDoneRef.current) return;
     if (formattedMessages.length === 0) return;
+    if (storeActiveTalkId !== talkId) return;
 
     const idx = formattedMessages.findIndex(
       (msg: any) =>
@@ -296,7 +313,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       setVirtuosoKey((k) => k + 1);
       setTimeout(() => setForceScrollIndex(null), 500);
     }
-  }, [formattedMessages, chatuserId]);
+  }, [formattedMessages, chatuserId, storeActiveTalkId, talkId]);
 
   // Keep scroll pinned to bottom for "all read" chats.
   // Cached chats swap formattedMessages up to 3x (cached → newer-sync → full-sync)
@@ -308,6 +325,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   useEffect(() => {
     if (!allReadBottomRef.current) return;
     if (formattedMessages.length === 0) return;
+    if (storeActiveTalkId !== talkId) return;
     const lastIndex = formattedMessages.length - 1;
     const withinSettle = Date.now() < allReadSettleUntilRef.current;
     const grew =
@@ -327,7 +345,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [formattedMessages]);
+  }, [formattedMessages, storeActiveTalkId, talkId]);
 
   // True remaining-unread count for THIS chat. The store cascades reads
   // (UPDATE_READ_STATUS marks every message up to the read one as read), so this
@@ -644,7 +662,48 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     [talkId, formattedMessages, firstItemIndex, highlightMessage, findMessageIndex, resolveGroupTarget]
   );
 
-  useImperativeHandle(ref, () => ({ scrollToBottom, scrollToMessage, markAllAsRead }), [scrollToBottom, scrollToMessage, markAllAsRead]);
+  // Notification deep-link: land on the notified message AND mark everything up
+  // to it as read, bypassing the "stop at first unread divider" positioning.
+  // Newer messages (arrived after the notification) stay unread.
+  const openAtMessageMarkingRead = useCallback(
+    (messageId: string) => {
+      const rawIdx = findMessageIndex(formattedMessages, messageId);
+      if (rawIdx < 0) {
+        // Not in the loaded page yet — fall back to fetch-and-scroll. Normal
+        // read-on-view will clear unreads once the view settles on it.
+        scrollToMessage(messageId);
+        return;
+      }
+
+      // Resolve media-group members to the group's first (rendered) message.
+      const { idx, id } = resolveGroupTarget(formattedMessages, rawIdx);
+      const target = formattedMessages[idx];
+
+      // Mark read up to (and including) the notified message. The store's
+      // UPDATE_READ_STATUS cascades to all earlier messages and the server marks
+      // everything up to this messageId as read too.
+      if (target) markAsRead(target.messageId, target.created);
+
+      // Neutralize the unread auto-positioning so it can't yank the view back
+      // to the unread divider.
+      initialPositionDoneRef.current = true;
+      allReadBottomRef.current = false;
+      suppressFollowRef.current = false;
+
+      // Remount Virtuoso positioned at the target so it *settles* there. A plain
+      // scrollToIndex loses to Virtuoso's initial unread-settle when the chat
+      // mounted with unreads present.
+      setForceScrollIndex(idx);
+      setVirtuosoKey((k) => k + 1);
+      setTimeout(() => {
+        setForceScrollIndex(null);
+        highlightMessage(id || messageId);
+      }, 500);
+    },
+    [formattedMessages, findMessageIndex, resolveGroupTarget, markAsRead, highlightMessage, scrollToMessage]
+  );
+
+  useImperativeHandle(ref, () => ({ scrollToBottom, scrollToMessage, markAllAsRead, openAtMessageMarkingRead }), [scrollToBottom, scrollToMessage, markAllAsRead, openAtMessageMarkingRead]);
 
   if (!isMsgApiCall || formattedMessages.length === 0) {
     if (isLoading) {

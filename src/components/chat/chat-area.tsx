@@ -12,7 +12,8 @@ import { getEncodedCookie, encryptUrlData } from "@/lib/encryption";
 import { apiHeader, postData } from "@/lib/api-helper";
 import { toast } from "sonner";
 import { unformatMentionsFromMessage } from "@/lib/message-formatters";
-import { MessageSquare, Sparkles, Download, Trash2, Forward, Pin, PinOff, Reply } from "lucide-react";
+import { MessageSquare, Sparkles, Download, Trash2, Forward, Pin, PinOff, Reply, Copy } from "lucide-react";
+import { copyImageToClipboard } from "@/lib/copy-image";
 import ChatHeader from "@/components/chat/chat-header";
 import { MessageList, type MessageListHandle } from "@/components/chat/message-list";
 import MessageInput from "@/components/chat/message-input";
@@ -441,8 +442,10 @@ export function ChatArea() {
     deepLinkFiredRef.current = key;
 
     // Defer one tick so MessageList has rendered the current page.
+    // Arriving via a notification: jump to the notified message AND mark
+    // everything up to it as read, instead of parking at the unread divider.
     setTimeout(() => {
-      messageListRef.current?.scrollToMessage(deepLinkMessageId);
+      messageListRef.current?.openAtMessageMarkingRead(deepLinkMessageId);
     }, 50);
 
     // Clear `?data=...` from the address bar so reload doesn't repeat the jump.
@@ -964,6 +967,29 @@ export function ChatArea() {
             }}
             toolbar={{
               buttons: [
+                // Copy — images only (covers single images and media-grid previews)
+                ...(currentSlide?.type === "image"
+                  ? [
+                      <button
+                        key="lightbox-copy"
+                        type="button"
+                        className="yarl__button"
+                        title="Copy"
+                        aria-label="Copy"
+                        onClick={async () => {
+                          if (!currentSlide?.mediaPath) return;
+                          try {
+                            await copyImageToClipboard(currentSlide.mediaPath);
+                            toast.success("Image copied to clipboard");
+                          } catch {
+                            toast.error("Couldn't copy image");
+                          }
+                        }}
+                      >
+                        <Copy className="h-6 w-6" />
+                      </button>,
+                    ]
+                  : []),
                 <button
                   key="lightbox-download"
                   type="button"

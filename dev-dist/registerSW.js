@@ -1,1 +1,1 @@
-if('serviceWorker' in navigator) navigator.serviceWorker.register('/xpertlabuat/front/xperttalk/admin/dev-sw.js?dev-sw', { scope: '/xpertlabuat/front/xperttalk/admin/', type: 'classic' })
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/xpertlabuat/front/xperttalk/dev-sw.js?dev-sw', { scope: '/xpertlabuat/front/xperttalk/', type: 'classic' })

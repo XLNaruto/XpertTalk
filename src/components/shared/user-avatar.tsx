@@ -44,7 +44,7 @@ export function UserAvatar({
             size === "sm" ? "h-2 w-2" : size === "lg" ? "h-3 w-3" : "h-2.5 w-2.5",
             online
               ? "bg-emerald-400 online-pulse"
-              : "bg-muted-foreground/40"
+              : "bg-orange-400"
           )}
         />
       )}

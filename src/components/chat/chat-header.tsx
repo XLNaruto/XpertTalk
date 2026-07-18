@@ -145,7 +145,7 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
                       "inline-block h-1.5 w-1.5 rounded-full",
                       isActive
                         ? "bg-emerald-400 online-pulse"
-                        : "bg-muted-foreground/40"
+                        : "bg-orange-400"
                     )}
                   />
                   {isActive ? "Online" : "Offline"}
