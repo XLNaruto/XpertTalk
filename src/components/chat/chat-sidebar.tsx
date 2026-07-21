@@ -307,7 +307,6 @@ export function ChatSidebar() {
     baseUrl: WS_URL,
     token: xtoken || null,
     onTalkUpdated: (newMessage: any) => {
-      logger.debug("Contact socket talkUpdated:", newMessage);
       updateUserList(newMessage);
     },
   });

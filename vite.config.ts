@@ -29,8 +29,8 @@ export default defineConfig(({ mode }) => {
           skipWaiting: true,
           clientsClaim: true,
           importScripts: [
-            'https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js',
-            'https://www.gstatic.com/firebasejs/9.0.0/firebase-messaging-compat.js',
+            'https://www.gstatic.com/firebasejs/12.10.0/firebase-app-compat.js',
+            'https://www.gstatic.com/firebasejs/12.10.0/firebase-messaging-compat.js',
             'firebase-sw-addon.js',
           ],
           globPatterns: [

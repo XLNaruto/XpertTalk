@@ -153,8 +153,6 @@ export function ChatArea() {
     token: xtoken || null,
     onConnect: (isReconnect: boolean) => {
       
-      logger.debug("talkId,talkType,WS_URL,xtoken, isReconnect+++++++++",talkId,talkType,WS_URL,xtoken, isReconnect);
-
       // On reconnect, fetch any messages missed during the disconnect gap
       if (isReconnect && talkId) {
         const lastMsg = messages[messages.length - 1];
@@ -435,25 +433,92 @@ export function ChatArea() {
   // Fires once per (talkId, deepLinkMessageId) pair, after messages have loaded.
   // Clears the URL `?data=...` param and the store flag so a reload won't re-trigger.
   const deepLinkFiredRef = useRef<string | null>(null);
+  const deepLinkWaitRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!deepLinkMessageId || !talkId || messages.length === 0) return;
     const key = `${talkId}:${deepLinkMessageId}`;
     if (deepLinkFiredRef.current === key) return;
-    deepLinkFiredRef.current = key;
 
-    // Defer one tick so MessageList has rendered the current page.
-    // Arriving via a notification: jump to the notified message AND mark
-    // everything up to it as read, instead of parking at the unread divider.
-    setTimeout(() => {
-      messageListRef.current?.openAtMessageMarkingRead(deepLinkMessageId);
-    }, 50);
+    // Commit the jump: land on the notified message AND mark everything up to
+    // it as read, instead of parking at the unread divider.
+    const commitJump = () => {
+      if (deepLinkFiredRef.current === key) return;
+      deepLinkFiredRef.current = key;
+      if (deepLinkWaitRef.current) {
+        clearTimeout(deepLinkWaitRef.current);
+        deepLinkWaitRef.current = null;
+      }
 
-    // Clear `?data=...` from the address bar so reload doesn't repeat the jump.
-    if (window.location.search) {
-      window.history.replaceState({}, "", window.location.pathname);
+      // Defer one tick so MessageList has rendered the current page.
+      setTimeout(() => {
+        messageListRef.current?.openAtMessageMarkingRead(deepLinkMessageId);
+      }, 50);
+
+      // Keep the chat identity in the address bar (`?data=...`) so it matches
+      // normal navigation and survives a reload, but rebuild it WITHOUT any
+      // messageId so reloading reopens the chat without repeating the jump.
+      const chatParam = encryptUrlData({
+        talkId,
+        receiverId,
+        receiverType,
+        receiverName,
+        talkType,
+        talkName,
+        isActive,
+        isGroupAdmin,
+      });
+      if (chatParam) {
+        window.history.replaceState(
+          {},
+          "",
+          `${window.location.pathname}?data=${chatParam}`
+        );
+      } else if (window.location.search) {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      setDeepLinkMessageId(null);
+    };
+
+    // The notified message is brand new (pushed while the chat was closed), so
+    // it's often NOT in the chat's cached page yet. Jumping now would miss it —
+    // openAtMessageMarkingRead's fallback only fetches OLDER messages, never the
+    // newer target. So wait until background sync brings it into `messages`;
+    // this effect re-runs as the list grows. Fall back after a timeout so a
+    // genuinely-missing id still resolves (fetch-and-scroll) and state clears.
+    const targetLoaded = messages.some(
+      (m: any) =>
+        m.messageId === deepLinkMessageId ||
+        m.forwardFromMessageId === deepLinkMessageId
+    );
+    if (targetLoaded) {
+      commitJump();
+    } else if (!deepLinkWaitRef.current) {
+      deepLinkWaitRef.current = setTimeout(commitJump, 5000);
     }
-    setDeepLinkMessageId(null);
-  }, [deepLinkMessageId, talkId, messages.length, setDeepLinkMessageId]);
+  }, [
+    deepLinkMessageId,
+    talkId,
+    messages,
+    receiverId,
+    receiverType,
+    receiverName,
+    talkType,
+    talkName,
+    isActive,
+    isGroupAdmin,
+    setDeepLinkMessageId,
+  ]);
+
+  // Cancel a pending deep-link wait if the chat (or target) changes mid-wait, so
+  // a stale timer can't jump the newly-opened chat to the wrong message.
+  useEffect(() => {
+    return () => {
+      if (deepLinkWaitRef.current) {
+        clearTimeout(deepLinkWaitRef.current);
+        deepLinkWaitRef.current = null;
+      }
+    };
+  }, [talkId, deepLinkMessageId]);
 
   // ── Edit/Reply handlers ──
 

@@ -1,3 +1,8 @@
+// Silence Workbox's verbose dev-mode console logging (Router responding to…,
+// Precaching did not find…, Using CacheFirst…). Must be set during SW eval,
+// before Workbox emits its per-fetch routing logs.
+self.__WB_DISABLE_DEV_LOGS = true;
+
 // Firebase config — merged into VitePWA service worker via importScripts
 const firebaseConfig = {
   apiKey: "AIzaSyArWCjVcd_6WukebmDXNNiT5xnfnmm_-DI",
@@ -31,7 +36,12 @@ const BADGE_URL = `${BASE}/media/logos/xperttalk-logo-48.png`;
 // handler show a toast instead (avoids duplicate notifications).
 self.addEventListener("push", (event) => {
   const pushPayload = event.data?.json() || {};
-  console.log("[firebase-sw] Push notification received:", pushPayload);
+  // Log a JSON snapshot — the live parsed object is not retained past the event,
+  // so expanding a plain object log in DevTools shows "No properties".
+  console.log(
+    "[firebase-sw] Push notification received:",
+    JSON.stringify(pushPayload)
+  );
   event.waitUntil(
     clients
       .matchAll({ type: "window", includeUncontrolled: true })
@@ -83,8 +93,8 @@ self.addEventListener("notificationclick", (event) => {
   const data = event.notification.data || {};
   console.log("[firebase-sw] notificationclick data:", JSON.stringify(data), data);
   // Deep-link URL used only when no app window is open. The client reads the
-  // `fcm` param (base64 JSON) to select the chat on load.
-  const target = `${BASE}/chats?fcm=${encodeFcmData(data)}`;
+  // `data` param (base64 JSON) to select the chat on load.
+  const target = `${BASE}/chats?data=${encodeFcmData(data)}`;
   console.log("[firebase-sw] notificationclick target:", target);
 
   event.waitUntil(
@@ -102,9 +112,13 @@ self.addEventListener("notificationclick", (event) => {
         const appClient = clientList.find((c) => c.url.includes(BASE));
         if (appClient) {
           console.log("[firebase-sw] branch=postMessage OPEN_CHAT ->", appClient.url);
-          return appClient.focus().then((c) => {
-            (c || appClient).postMessage({ type: "OPEN_CHAT", data });
-            console.log("[firebase-sw] posted OPEN_CHAT");
+          // Post first — this does not require focus and must not be gated on it.
+          // focus() can reject depending on window/OS state, which previously
+          // swallowed the OPEN_CHAT message (so the app never set ?data).
+          appClient.postMessage({ type: "OPEN_CHAT", data });
+          console.log("[firebase-sw] posted OPEN_CHAT");
+          return appClient.focus().catch((err) => {
+            console.log("[firebase-sw] focus() failed (non-fatal):", err?.message);
           });
         }
         // Nothing open — launch the app/PWA at the deep-linked chat.

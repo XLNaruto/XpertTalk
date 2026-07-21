@@ -183,6 +183,32 @@ function InitChat() {
     }
   };
 
+  // Deletes Firebase's IndexedDB stores. A newer Firebase build on this origin
+  // can leave `firebase-messaging-database` at a higher schema version than the
+  // one this app's SDK requests, which then throws
+  // "VersionError: The requested version (1) is less than the existing version (2)".
+  // Removing the stale DBs lets getToken re-create them at the expected version.
+  const deleteFirebaseIDB = () =>
+    Promise.all(
+      ["firebase-messaging-database", "firebase-installations-database"].map(
+        (name) =>
+          new Promise<void>((resolve) => {
+            const req = indexedDB.deleteDatabase(name);
+            req.onsuccess = req.onerror = req.onblocked = () => resolve();
+          })
+      )
+    );
+
+  const generateFCMToken = async (swReady: ServiceWorkerRegistration) => {
+    const { messaging } = await import("@/lib/firebase");
+    const { getToken } = await import("firebase/messaging");
+    return getToken(messaging, {
+      vapidKey:
+        "BFog9fo16WkUfO37C9jJZB8l0TfN2tVxNY-Y3Mry-7SzXSbsAMOHvN4ZONHX2DErzLI8JuU7ijhm9teY7nY9dP8",
+      serviceWorkerRegistration: swReady,
+    });
+  };
+
   const saveFCM = async () => {
     try {
       logger.debug("saveFCM: starting...");
@@ -203,13 +229,21 @@ function InitChat() {
         return;
       }
 
-      const { messaging } = await import("@/lib/firebase");
-      const { getToken } = await import("firebase/messaging");
-      const token = await getToken(messaging, {
-        vapidKey:
-          "BFog9fo16WkUfO37C9jJZB8l0TfN2tVxNY-Y3Mry-7SzXSbsAMOHvN4ZONHX2DErzLI8JuU7ijhm9teY7nY9dP8",
-        serviceWorkerRegistration: swReady,
-      });
+      let token: string;
+      try {
+        token = await generateFCMToken(swReady);
+      } catch (error) {
+        // Self-heal the stale-schema VersionError by clearing Firebase's IDB
+        // and retrying once.
+        if ((error as Error)?.name === "VersionError") {
+          logger.debug("saveFCM: stale Firebase IDB, clearing and retrying...");
+          await deleteFirebaseIDB();
+          token = await generateFCMToken(swReady);
+        } else {
+          throw error;
+        }
+      }
+
       logger.debug("saveFCM: token generated", token);
       addFCMToken(token);
     } catch (error) {
