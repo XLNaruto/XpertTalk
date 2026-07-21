@@ -39,7 +39,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { getEncodedCookie } from "@/lib/encryption";
-import { copyImageToClipboard } from "@/lib/copy-image";
+import { copyImageToClipboard, prewarmImage } from "@/lib/copy-image";
 import { QuickReactionsBar } from "@/components/chat/quick-reactions-bar";
 import { MessageReactions } from "@/components/chat/message-reactions";
 import { ReactionDetailsDialog } from "@/components/modals/reaction-details-dialog";
@@ -495,6 +495,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
         )}
         onClick={() => onMediaClick(path, "image")}
+        // Fetch + PNG-encode in the background on hover, so a later "Copy image"
+        // is a pure clipboard write (~ms) instead of a 3-4s download+encode.
+        onMouseEnter={() => prewarmImage(path)}
       >
         <img
           src={path}

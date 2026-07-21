@@ -107,6 +107,16 @@ function MediaGrid({
     setDeleteConfirmOpen(false);
   };
 
+  // Hide Delete All once any message in the group is older than 24 hours.
+  // Admins are exempt (same rule as the message bubble context menu).
+  const isAdmin = (import.meta.env.VITE_APP_USER || "employee") === "admin";
+  const canDeleteAll =
+    isAdmin ||
+    messages.every(
+      (m: any) =>
+        Date.now() - new Date(m.created).getTime() < 24 * 60 * 60 * 1000
+    );
+
   // Determine cell sizing based on count
   function getCellClass(idx: number) {
     if (total === 1) return "aspect-square w-[200px]";
@@ -377,7 +387,7 @@ function MediaGrid({
                 <SmilePlus className="h-4 w-4" /> View Reactions
               </ContextMenuItem>
             )}
-            {isSender && (
+            {isSender && canDeleteAll && (
               <ContextMenuItem
                 className="gap-2 rounded-lg px-2.5 py-2 text-sm"
                 onClick={() => setDeleteConfirmOpen(true)}

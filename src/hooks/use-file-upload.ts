@@ -149,6 +149,11 @@ export default function useFileUpload({
 }: UseFileUploadOptions) {
   // ── State ──
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  // Mirror the current selection in a ref so the cap check can read the live
+  // count WITHOUT doing it inside a setState updater (updaters must be pure —
+  // a toast in there re-fires on unrelated re-renders, e.g. removing a file).
+  const selectedFilesRef = useRef<File[]>([]);
+  selectedFilesRef.current = selectedFiles;
   const [isFileDragging, setIsFileDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -177,77 +182,23 @@ export default function useFileUpload({
 
   // ── Actions ──
 
-  const addFiles = useCallback(async (
-    newFiles: File[],
-    opts?: { compressOversizedImages?: boolean }
-  ) => {
-    // Convert any HEIC/HEIF files to JPEG first so they display in all browsers.
-    let incomingFiles = newFiles;
-    if (newFiles.some(isHeicFile)) {
-      const toastId = toast.loading("Please wait…");
-      const failedConversions: string[] = [];
-      const converted = await Promise.all(
-        newFiles.map(async (file) => {
-          if (!isHeicFile(file)) return file;
-          try {
-            return await convertHeicToJpeg(file);
-          } catch (error) {
-            logger.error("HEIC conversion failed:", file.name, error);
-            failedConversions.push(file.name);
-            return null;
-          }
-        })
-      );
-      toast.dismiss(toastId);
-      incomingFiles = converted.filter((f): f is File => f !== null);
-      if (failedConversions.length > 0) {
-        toast.error(
-          `Could not convert the following images:\n- ${failedConversions.join(
-            "\n- "
-          )}`
-        );
-      }
-    }
-
-    // Rescue oversized images (e.g. a big PNG pasted from the clipboard) by
-    // re-encoding them to JPEG so they fit under the image size limit.
-    if (opts?.compressOversizedImages) {
-      const needsCompress = incomingFiles.some(
-        (f) => f.type.startsWith("image/") && f.size > MAX_DOC_IMAGE_SIZE
-      );
-      if (needsCompress) {
-        const toastId = toast.loading("Please wait…");
-        incomingFiles = await Promise.all(
-          incomingFiles.map(async (file) => {
-            if (!file.type.startsWith("image/") || file.size <= MAX_DOC_IMAGE_SIZE) {
-              return file;
-            }
-            try {
-              return await compressImageToLimit(file, MAX_DOC_IMAGE_SIZE);
-            } catch (error) {
-              logger.error("Image compression failed:", file.name, error);
-              return file; // fall through to the normal size check
-            }
-          })
-        );
-        toast.dismiss(toastId);
-      }
-    }
+  // Validate a batch of ready-to-use files and append the good ones to the
+  // selection (respecting the 10-file cap). Synchronous — no encoding here — so
+  // it returns in well under a frame. Bad files raise the usual toasts.
+  const commitValidFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
 
     const validFiles: File[] = [];
     const oversizedFiles: string[] = [];
     const invalidFiles: string[] = [];
 
-    incomingFiles.forEach((file) => {
+    files.forEach((file) => {
       if (!ALL_ALLOWED.includes(file.type)) {
         invalidFiles.push(file.name);
         return;
       }
 
-      if (
-        DOC_TYPES.includes(file.type) ||
-        IMAGE_TYPES.includes(file.type)
-      ) {
+      if (DOC_TYPES.includes(file.type) || IMAGE_TYPES.includes(file.type)) {
         if (file.size <= MAX_DOC_IMAGE_SIZE) {
           validFiles.push(file);
         } else {
@@ -277,17 +228,78 @@ export default function useFileUpload({
     }
 
     if (validFiles.length > 0) {
-      setSelectedFiles((prev) => {
-        const total = prev.length + validFiles.length;
-        if (total > 10) {
-          toast.error("Maximum 10 files allowed at a time");
-          const allowed = 10 - prev.length;
-          return allowed > 0 ? [...prev, ...validFiles.slice(0, allowed)] : prev;
-        }
-        return [...prev, ...validFiles];
-      });
+      // Decide the cap OUTSIDE the setState updater (using the live ref count)
+      // so the toast is a one-off side effect here, not re-run on every render.
+      const room = 10 - selectedFilesRef.current.length;
+      if (validFiles.length > room) {
+        toast.error("Maximum 10 files allowed at a time");
+      }
+      const toAdd = room > 0 ? validFiles.slice(0, room) : [];
+      if (toAdd.length > 0) {
+        setSelectedFiles((prev) => [...prev, ...toAdd]);
+      }
     }
   }, []);
+
+  const addFiles = useCallback(async (
+    newFiles: File[],
+    opts?: { compressOversizedImages?: boolean }
+  ) => {
+    // A file needs async work (decode + re-encode, measured in seconds) only if
+    // it's HEIC or an oversized image we've been asked to compress. Everything
+    // else is validated and shown instantly.
+    const needsProcessing = (f: File) =>
+      isHeicFile(f) ||
+      (!!opts?.compressOversizedImages &&
+        f.type.startsWith("image/") &&
+        f.size > MAX_DOC_IMAGE_SIZE);
+
+    const fastFiles = newFiles.filter((f) => !needsProcessing(f));
+    const slowFiles = newFiles.filter(needsProcessing);
+
+    // Add the no-work files immediately so the preview updates within a frame.
+    commitValidFiles(fastFiles);
+
+    if (slowFiles.length === 0) return;
+
+    // Convert/compress the rest in the background; they pop into the preview as
+    // they finish instead of blocking the whole batch.
+    const toastId = toast.loading("Please wait…");
+    const failedConversions: string[] = [];
+
+    const processed = await Promise.all(
+      slowFiles.map(async (file) => {
+        if (isHeicFile(file)) {
+          try {
+            return await convertHeicToJpeg(file);
+          } catch (error) {
+            logger.error("HEIC conversion failed:", file.name, error);
+            failedConversions.push(file.name);
+            return null;
+          }
+        }
+        // Oversized image → re-encode to JPEG to fit the limit.
+        try {
+          return await compressImageToLimit(file, MAX_DOC_IMAGE_SIZE);
+        } catch (error) {
+          logger.error("Image compression failed:", file.name, error);
+          return file; // fall through to the normal size check
+        }
+      })
+    );
+
+    toast.dismiss(toastId);
+
+    if (failedConversions.length > 0) {
+      toast.error(
+        `Could not convert the following images:\n- ${failedConversions.join(
+          "\n- "
+        )}`
+      );
+    }
+
+    commitValidFiles(processed.filter((f): f is File => f !== null));
+  }, [commitValidFiles]);
 
   const removeFile = useCallback((index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
@@ -295,6 +307,13 @@ export default function useFileUpload({
 
   const clearFiles = useCallback(() => {
     setSelectedFiles([]);
+  }, []);
+
+  // Replace the whole selection with a restored draft. Unlike addFiles this
+  // SETS instead of appending, so re-running it (e.g. the draft-load effect
+  // firing twice) is idempotent and never trips the 10-file cap toast.
+  const restoreFiles = useCallback((files: File[]) => {
+    setSelectedFiles(files.slice(0, 10));
   }, []);
 
   // ── Upload ──
@@ -441,6 +460,7 @@ export default function useFileUpload({
     isUploading,
     fileInputRef,
     addFiles,
+    restoreFiles,
     removeFile,
     clearFiles,
     uploadFiles,

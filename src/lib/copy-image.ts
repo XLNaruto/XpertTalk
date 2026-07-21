@@ -21,14 +21,38 @@ function clipboardSupports(type: string): boolean {
   return typeof supports === "function" ? supports(type) : false;
 }
 
+// Cache fetched image bytes by URL so repeat copies of the same image skip the
+// network round-trip and complete in milliseconds instead of re-downloading.
+const blobCache = new Map<string, Blob>();
+
+async function fetchImageBlob(url: string): Promise<Blob> {
+  const cached = blobCache.get(url);
+  if (cached) return cached;
+  const res = await fetch(url);
+  const blob = await res.blob();
+  blobCache.set(url, blob);
+  return blob;
+}
+
+// Fetch (and optionally PNG-encode) an image ahead of time — call on render or
+// hover so the eventual copy click is just a clipboard write.
+export async function prewarmImage(url: string): Promise<void> {
+  if (!url) return;
+  try {
+    const blob = await fetchImageBlob(url);
+    if (blob.type && blob.type !== "image/png") await convertToPng(blob);
+  } catch {
+    // Best-effort warmup; ignore failures.
+  }
+}
+
 export async function copyImageToClipboard(url: string): Promise<void> {
   if (!url) throw new Error("No image URL");
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
     throw new Error("Clipboard image write unsupported");
   }
 
-  const res = await fetch(url);
-  const blob = await res.blob();
+  const blob = await fetchImageBlob(url);
   const originalType = blob.type || "image/png";
 
   // Write the original bytes directly only when the browser says it can — this

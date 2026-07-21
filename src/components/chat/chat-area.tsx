@@ -13,7 +13,7 @@ import { apiHeader, postData } from "@/lib/api-helper";
 import { toast } from "sonner";
 import { unformatMentionsFromMessage } from "@/lib/message-formatters";
 import { MessageSquare, Sparkles, Download, Trash2, Forward, Pin, PinOff, Reply, Copy } from "lucide-react";
-import { copyImageToClipboard } from "@/lib/copy-image";
+import { copyImageToClipboard, prewarmImage } from "@/lib/copy-image";
 import ChatHeader from "@/components/chat/chat-header";
 import { MessageList, type MessageListHandle } from "@/components/chat/message-list";
 import MessageInput from "@/components/chat/message-input";
@@ -963,7 +963,15 @@ export function ChatArea() {
             plugins={[Video, Zoom]}
             carousel={{ finite: true }}
             on={{
-              view: ({ index }: { index: number }) => setCurrentIndex(index),
+              view: ({ index }: { index: number }) => {
+                setCurrentIndex(index);
+                // Warm the clipboard cache for the visible image so the toolbar
+                // "Copy" is a pure clipboard write (~ms) instead of a slow fetch.
+                const slide = (mediaSlides as any)[index];
+                if (slide?.type === "image" && slide?.mediaPath) {
+                  prewarmImage(slide.mediaPath);
+                }
+              },
             }}
             toolbar={{
               buttons: [
@@ -1065,8 +1073,15 @@ export function ChatArea() {
                     ? <PinOff className="h-6 w-6" />
                     : <Pin className="h-6 w-6" />}
                 </button>,
-                // Only show delete for sender's own messages
-                ...(currentSlide && String(currentSlide.senderChatuserId) === String(chatuserId)
+                // Only show delete for sender's own messages, and hide once
+                // the message is older than 24 hours (admins are exempt — same
+                // rule as the message bubble context menu).
+                ...(currentSlide &&
+                String(currentSlide.senderChatuserId) === String(chatuserId) &&
+                ((import.meta.env.VITE_APP_USER || "employee") === "admin" ||
+                  (currentSlide.created &&
+                    Date.now() - new Date(currentSlide.created).getTime() <
+                      24 * 60 * 60 * 1000))
                   ? [
                       <button
                         key="lightbox-delete"

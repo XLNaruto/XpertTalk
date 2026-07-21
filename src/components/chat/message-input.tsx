@@ -173,7 +173,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       isFileDragging,
       isUploading,
       fileInputRef,
-      addFiles,
+      restoreFiles,
       removeFile,
       clearFiles,
       uploadFiles,
@@ -202,7 +202,9 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       onDraftLoaded: (draft: DraftState | null) => {
         if (draft) {
           onMessageChange(draft.message);
-          addFiles(draft.attachments || []);
+          // Restore (replace), don't append — appending re-runs the 10-file cap
+          // and would falsely error "Maximum 10 files" if this fires twice.
+          restoreFiles(draft.attachments || []);
           onDraftLoaded?.(draft);
         } else {
           onDraftLoaded?.(null);

@@ -14,6 +14,7 @@ export interface MediaSlide {
   mediaName?: string;
   senderChatuserId: string;
   isPinned?: boolean;
+  created?: string;
 }
 
 export default function useMediaLightbox(formattedMessages: any[]) {
@@ -57,6 +58,7 @@ export default function useMediaLightbox(formattedMessages: any[]) {
               mediaName: effectiveName,
               senderChatuserId: msg.senderChatuserId,
               isPinned: msg.isPinned,
+              created: msg.created,
             };
           }
           return {
@@ -71,6 +73,7 @@ export default function useMediaLightbox(formattedMessages: any[]) {
             mediaName: effectiveName,
             senderChatuserId: msg.senderChatuserId,
             isPinned: msg.isPinned,
+            created: msg.created,
           };
         }),
     [formattedMessages]
