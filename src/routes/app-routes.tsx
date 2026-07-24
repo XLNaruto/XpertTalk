@@ -18,7 +18,7 @@ export default function AppRoutes() {
 
   const { BASE_URL } = import.meta.env;
 
-  // console.log = console.warn = console.error = () => {};
+  console.log = console.warn = console.error = () => {};
 
   useEffect(() => {
     // Disable context menu (right-click)

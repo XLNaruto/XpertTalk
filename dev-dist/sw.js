@@ -80,10 +80,10 @@ define(['./workbox-b6866b34'], (function (workbox) { 'use strict';
    */
   workbox.precacheAndRoute([{
     "url": "registerSW.js",
-    "revision": "78582faad8c53d39ee8111c3f007cb0d"
+    "revision": "a6f83a9e953bede3b148a975e3d9a0d5"
   }, {
     "url": "index.html",
-    "revision": "0.35c95sqal38"
+    "revision": "0.31ptn8gspc"
   }], {
     "ignoreURLParametersMatching": [/^utm_/, /^fbclid$/]
   });
