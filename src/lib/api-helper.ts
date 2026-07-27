@@ -46,17 +46,31 @@ export const apiHeader = (isFormData: any, encryptionLevel: any = 0) => {
   }
 };
 
+/** Absolute path of the unauthorized screen, respecting the Vite base path. */
+const UNAUTHORIZED_PATH = `${(import.meta.env.BASE_URL || "/").replace(
+  /\/$/,
+  ""
+)}/unauthorized`;
+
+/** Wipe the session and land the user on the unauthorized screen. */
+function forceUnauthorized() {
+  clearCookies();
+  sessionStorage.clear();
+  localStorage.removeItem("kt-auth-react-v");
+
+  // Already there — don't loop.
+  if (location.pathname === UNAUTHORIZED_PATH) return;
+  location.replace(UNAUTHORIZED_PATH);
+}
+
 /**
  * Check API response for auth errors and force logout if needed.
- * Handles: 400 (token not provided), 401, 403
+ * Handles: 400 (token not provided), 401, 403 → unauthorized screen
  */
 function handleAuthError(responseData: any): boolean {
   const status = String(responseData?.status);
   if (["401", "403"].includes(status)) {
-    clearCookies();
-    sessionStorage.clear();
-    localStorage.removeItem("kt-auth-react-v");
-    location.reload();
+    forceUnauthorized();
     return true;
   }
   // 400 with token-related message → also logout
@@ -65,10 +79,20 @@ function handleAuthError(responseData: any): boolean {
     typeof responseData?.message === "string" &&
     responseData.message.toLowerCase().includes("token")
   ) {
-    clearCookies();
-    sessionStorage.clear();
-    localStorage.removeItem("kt-auth-react-v");
-    location.reload();
+    forceUnauthorized();
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Same check for transport-level failures — when the server answers with a real
+ * HTTP 401/403 instead of a 200 envelope, axios throws and lands here.
+ */
+function handleHttpAuthError(error: any): boolean {
+  const status = String(error?.response?.status);
+  if (["401", "403"].includes(status)) {
+    forceUnauthorized();
     return true;
   }
   return false;
@@ -105,6 +129,7 @@ export const getData = async (api: string, params: any, headers: any) => {
 
     return response;
   } catch (error: any) {
+    handleHttpAuthError(error);
     console.error("Error in getData:", error.message);
     return undefined;
   }
@@ -127,6 +152,7 @@ export const postData = async (api: string, data: any, headers: any) => {
 
     return response;
   } catch (error: any) {
+    handleHttpAuthError(error);
     console.error("Error in postData:", error.message);
     return undefined;
   }
@@ -149,6 +175,7 @@ export const patchData = async (api: string, data: any, headers: any) => {
 
     return response;
   } catch (error: any) {
+    handleHttpAuthError(error);
     console.error("Error in patchData:", error.message);
     return undefined;
   }
@@ -163,8 +190,13 @@ export const deleteData = async (api: string, data: any, headers: any) => {
       ...headers,
     });
 
+    if (String(response?.status) == "200") {
+      if (handleAuthError(response.data)) return undefined;
+    }
+
     return response;
   } catch (error: any) {
+    handleHttpAuthError(error);
     console.error("Error in deleteData:", error.message);
     return undefined;
   }

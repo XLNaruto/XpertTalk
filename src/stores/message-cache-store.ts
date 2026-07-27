@@ -50,7 +50,8 @@ type MessageAction =
   | { type: 'DELETE_MESSAGE'; payload: string }
   | { type: 'UPDATE_READ_STATUS'; payload: { messageId: string } }
   | { type: 'TOGGLE_REACTION'; payload: { messageId: string; chatuserId: string; userName: string; userProfile?: string; reaction: string } }
-  | { type: 'TOGGLE_PIN'; payload: { messageId: string; isPinned: boolean } };
+  | { type: 'TOGGLE_PIN'; payload: { messageId: string; isPinned: boolean } }
+  | { type: 'UPDATE_MEDIA'; payload: { messageId?: string; mediaId?: string; mediaPath: string; mediaName?: string } };
 
 const START_INDEX = 1_000_000;
 // userStage removed — endpoints now use common prefix
@@ -147,6 +148,17 @@ function applyMessageAction(messages: any[], action: MessageAction): any[] {
           ? currentReactions.filter((_: any, i: number) => i !== existingIndex)
           : [...currentReactions, { chatuserId, userName, userProfile, reaction }];
         return { ...m, reactions: newReactions };
+      });
+    }
+    case 'UPDATE_MEDIA': {
+      // Backend finished converting an upload (HEIC → PNG) and handed us the
+      // new path. Match on messageId, falling back to mediaId for payloads
+      // that only identify the media record.
+      const { messageId, mediaId, mediaPath, mediaName } = action.payload;
+      return messages.map(m => {
+        const hit = messageId ? m.messageId === messageId : !!mediaId && m.mediaId === mediaId;
+        if (!hit) return m;
+        return { ...m, mediaPath, ...(mediaName ? { mediaName } : {}) };
       });
     }
     case 'TOGGLE_PIN': {

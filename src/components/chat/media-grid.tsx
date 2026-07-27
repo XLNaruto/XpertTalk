@@ -34,6 +34,8 @@ import { getEncodedCookie } from "@/lib/encryption";
 import { QuickReactionsBar } from "@/components/chat/quick-reactions-bar";
 import { MessageReactions } from "@/components/chat/message-reactions";
 import { ReactionDetailsDialog } from "@/components/modals/reaction-details-dialog";
+import { isConvertingMedia } from "@/lib/media-convert";
+import { ConvertingMedia } from "@/components/chat/converting-media";
 
 interface MediaGridProps {
   messages: any[];
@@ -157,17 +159,21 @@ function MediaGrid({
           const showCountOverlay = idx === 3 && extraCount > 0;
           const span = shouldSpan(idx);
           const cellClass = getCellClass(idx);
+          // HEIC/HEIF still being converted to PNG server-side — nothing to
+          // paint or open yet, so show the loader and swallow the click.
+          const converting = isConvertingMedia(msg.mediaPath);
 
           return (
             <div
               key={msg.messageId}
               className={cn(
-                "relative cursor-pointer overflow-hidden bg-black/15 [.dark_&]:bg-white/5",
+                "relative overflow-hidden bg-black/15 [.dark_&]:bg-white/5",
+                !converting && "cursor-pointer",
                 cellClass,
                 span && "col-span-2"
               )}
               onClick={
-                !isSelectionMode
+                !isSelectionMode && !converting
                   ? () =>
                       onMediaClick(
                         msg.mediaPath,
@@ -176,7 +182,9 @@ function MediaGrid({
                   : undefined
               }
             >
-              {msg.messageType === "VIDEO" ? (
+              {converting ? (
+                <ConvertingMedia className="h-full w-full" />
+              ) : msg.messageType === "VIDEO" ? (
                 <>
                   <video
                     src={msg.mediaPath}

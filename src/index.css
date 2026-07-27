@@ -1862,13 +1862,36 @@ body:has(.yarl__root) [data-slot="alert-dialog-content"] {
   animation: offlineCardIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* ══════════════════════════════════════════════════════════
+   UNAUTHORIZED SCREEN — reuses the offline overlay animations
+   ══════════════════════════════════════════════════════════ */
+
+/* Lock badge pops in slightly after the card */
+@keyframes unauthLockIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-25deg);
+  }
+  70% {
+    transform: scale(1.15) rotate(4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+.unauth-lock-in {
+  animation: unauthLockIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.35s both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .offline-ring,
   .offline-pulse-slow,
   .offline-shake,
   .offline-dot,
   .offline-float,
-  .offline-card-in {
+  .offline-card-in,
+  .unauth-lock-in {
     animation: none;
   }
 }

@@ -44,9 +44,9 @@ const MAX_DOC_IMAGE_SIZE = 12 * 1024 * 1024; // 12 MB
 const MAX_VIDEO_SIZE = 18 * 1024 * 1024; // 18 MB
 
 // ── HEIC/HEIF handling ────────────────────────────────────────
-// Most browsers (Chrome, Firefox, Edge) can't render HEIC/HEIF in an <img>,
-// so we convert to JPEG on the client before upload. HEIC files also often
-// report an empty MIME type, so we detect by extension as a fallback.
+// Conversion happens on the backend — we just upload the original file.
+// HEIC files often report an empty MIME type, so detect by extension as a
+// fallback to keep them from being rejected by the type validation below.
 
 const HEIC_EXT = /\.(heic|heif)$/i;
 
@@ -116,22 +116,6 @@ async function compressImageToLimit(file: File, maxBytes: number): Promise<File>
   }
 }
 
-async function convertHeicToJpeg(file: File): Promise<File> {
-  // Dynamic import keeps the heavy libheif wasm out of the main bundle.
-  const { default: heic2any } = await import("heic2any");
-  const result = await heic2any({
-    blob: file,
-    toType: "image/jpeg",
-    quality: 0.9,
-  });
-  const blob = Array.isArray(result) ? result[0] : result;
-  const newName = `${file.name.replace(HEIC_EXT, "")}.jpg`;
-  return new File([blob], newName, {
-    type: "image/jpeg",
-    lastModified: file.lastModified,
-  });
-}
-
 // ── Types ─────────────────────────────────────────────────────
 
 type FileType = "IMAGE" | "VIDEO" | "DOCUMENT";
@@ -193,12 +177,16 @@ export default function useFileUpload({
     const invalidFiles: string[] = [];
 
     files.forEach((file) => {
-      if (!ALL_ALLOWED.includes(file.type)) {
+      // HEIC/HEIF often arrives with an empty MIME type — treat it as an image
+      // by extension so it isn't rejected here (the backend converts it).
+      const heic = isHeicFile(file);
+
+      if (!heic && !ALL_ALLOWED.includes(file.type)) {
         invalidFiles.push(file.name);
         return;
       }
 
-      if (DOC_TYPES.includes(file.type) || IMAGE_TYPES.includes(file.type)) {
+      if (heic || DOC_TYPES.includes(file.type) || IMAGE_TYPES.includes(file.type)) {
         if (file.size <= MAX_DOC_IMAGE_SIZE) {
           validFiles.push(file);
         } else {
@@ -245,14 +233,13 @@ export default function useFileUpload({
     newFiles: File[],
     opts?: { compressOversizedImages?: boolean }
   ) => {
-    // A file needs async work (decode + re-encode, measured in seconds) only if
-    // it's HEIC or an oversized image we've been asked to compress. Everything
-    // else is validated and shown instantly.
+    // A file needs async work (decode + re-encode) only if it's an oversized
+    // image we've been asked to compress. Everything else is validated and
+    // shown instantly.
     const needsProcessing = (f: File) =>
-      isHeicFile(f) ||
-      (!!opts?.compressOversizedImages &&
-        f.type.startsWith("image/") &&
-        f.size > MAX_DOC_IMAGE_SIZE);
+      !!opts?.compressOversizedImages &&
+      f.type.startsWith("image/") &&
+      f.size > MAX_DOC_IMAGE_SIZE;
 
     const fastFiles = newFiles.filter((f) => !needsProcessing(f));
     const slowFiles = newFiles.filter(needsProcessing);
@@ -265,19 +252,9 @@ export default function useFileUpload({
     // Convert/compress the rest in the background; they pop into the preview as
     // they finish instead of blocking the whole batch.
     const toastId = toast.loading("Please wait…");
-    const failedConversions: string[] = [];
 
     const processed = await Promise.all(
       slowFiles.map(async (file) => {
-        if (isHeicFile(file)) {
-          try {
-            return await convertHeicToJpeg(file);
-          } catch (error) {
-            logger.error("HEIC conversion failed:", file.name, error);
-            failedConversions.push(file.name);
-            return null;
-          }
-        }
         // Oversized image → re-encode to JPEG to fit the limit.
         try {
           return await compressImageToLimit(file, MAX_DOC_IMAGE_SIZE);
@@ -290,15 +267,7 @@ export default function useFileUpload({
 
     toast.dismiss(toastId);
 
-    if (failedConversions.length > 0) {
-      toast.error(
-        `Could not convert the following images:\n- ${failedConversions.join(
-          "\n- "
-        )}`
-      );
-    }
-
-    commitValidFiles(processed.filter((f): f is File => f !== null));
+    commitValidFiles(processed);
   }, [commitValidFiles]);
 
   const removeFile = useCallback((index: number) => {

@@ -40,6 +40,7 @@ import Video from "yet-another-react-lightbox/plugins/video";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
 import logger from "@/lib/logger";
+import { parseMediaConverted } from "@/lib/media-convert";
 
 
 export function ChatArea() {
@@ -253,6 +254,13 @@ export function ChatArea() {
           reaction: data.reaction,
         },
       });
+    },
+    onMediaConverted: (data) => {
+      // HEIC/HEIF was converted to PNG server-side — swap in the new path so
+      // the bubble drops its loader and paints the image.
+      const converted = parseMediaConverted(data);
+      if (!converted) return;
+      dispatchMessage({ type: "UPDATE_MEDIA", payload: converted });
     },
     onPinToggled: (data) => {
       dispatchMessage({

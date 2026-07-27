@@ -18,6 +18,9 @@ interface UseTalkSocketOptions {
   onPinToggled?: (data: any) => void;
   onUserTyping?: (data: any) => void;
   onUserStopTyping?: (data: any) => void;
+  // Fired when the backend finishes converting an upload (e.g. HEIC → PNG)
+  // and the message's media path changes.
+  onMediaConverted?: (data: any) => void;
   onConnect?: (isReconnect: boolean) => void;
 }
 
@@ -35,6 +38,7 @@ export function useTalkSocket({
   onPinToggled,
   onUserTyping,
   onUserStopTyping,
+  onMediaConverted,
   onConnect,
 }: UseTalkSocketOptions) {
   const socketRef = useRef<Socket | null>(null);
@@ -60,6 +64,8 @@ export function useTalkSocket({
   onUserTypingRef.current = onUserTyping;
   const onUserStopTypingRef = useRef(onUserStopTyping);
   onUserStopTypingRef.current = onUserStopTyping;
+  const onMediaConvertedRef = useRef(onMediaConverted);
+  onMediaConvertedRef.current = onMediaConverted;
   const onConnectRef = useRef(onConnect);
   onConnectRef.current = onConnect;
   // talkType is NOT part of socket identity (not in query params),
@@ -114,6 +120,7 @@ export function useTalkSocket({
     socket.on("pinToggled", (data) => onPinToggledRef.current?.(data));
     socket.on("userTyping", (data) => onUserTypingRef.current?.(data));
     socket.on("userStopTyping", (data) => onUserStopTypingRef.current?.(data));
+    socket.on("mediaConverted", (data) => onMediaConvertedRef.current?.(data));
 
     // Request presence every 30s for private chats (reads latest talkType from ref)
     const presenceInterval = setInterval(() => {

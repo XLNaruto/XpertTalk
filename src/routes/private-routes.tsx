@@ -6,7 +6,7 @@ export function PrivateRoutes({ children }: PropsWithChildren) {
   const { auth } = useAuth();
 
   if (!auth) {
-    return <Navigate to="/auth" replace />;
+    return <Navigate to="/unauthorized" replace />;
   }
 
   return <>{children}</>;

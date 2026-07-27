@@ -3,6 +3,7 @@ import { useAuth } from "@/providers/auth-provider";
 import { PrivateRoutes } from "@/routes/private-routes";
 import AuthPage from "@/pages/auth-page";
 import ChatPage from "@/pages/chat-page";
+import UnauthorizedPage from "@/pages/unauthorized-page";
 import { clearCookies } from "@/lib/cookie";
 import { useEffect } from "react";
 
@@ -72,8 +73,12 @@ export default function AppRoutes() {
         />
         <Route path="/logout" element={<LogoutPage />} />
         <Route
+          path="/unauthorized"
+          element={auth ? <Navigate to="/chats" replace /> : <UnauthorizedPage />}
+        />
+        <Route
           path="*"
-          element={<Navigate to={auth ? "/chats" : "/auth"} replace />}
+          element={<Navigate to={auth ? "/chats" : "/unauthorized"} replace />}
         />
       </Routes>
     </BrowserRouter>

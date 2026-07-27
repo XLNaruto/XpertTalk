@@ -40,6 +40,9 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { getEncodedCookie } from "@/lib/encryption";
 import { copyImageToClipboard, prewarmImage } from "@/lib/copy-image";
+import { isConvertingMedia } from "@/lib/media-convert";
+import { ConvertingMedia } from "@/components/chat/converting-media";
+import { Skeleton } from "@/components/ui/skeleton";
 import { QuickReactionsBar } from "@/components/chat/quick-reactions-bar";
 import { MessageReactions } from "@/components/chat/message-reactions";
 import { ReactionDetailsDialog } from "@/components/modals/reaction-details-dialog";
@@ -276,7 +279,9 @@ function ReplyPreview({
       </div>
       {isMediaReply && replyMsg.mediaPath && (
         <div className="h-[34px] w-[34px] shrink-0 overflow-hidden rounded-lg">
-          {replyMsg.messageType === "IMAGE" ? (
+          {isConvertingMedia(replyMsg.mediaPath) ? (
+            <Skeleton className="h-full w-full rounded-lg" />
+          ) : replyMsg.messageType === "IMAGE" ? (
             <img
               src={replyMsg.mediaPath}
               alt=""
@@ -482,6 +487,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   function renderImage(path: string) {
     if (imgError) {
       return <FallbackImage isSender={isSender} />;
+    }
+    // Still a .heic/.heif original — the backend is converting it to PNG and
+    // will push the new path over `mediaConverted`. Nothing paintable yet.
+    if (isConvertingMedia(path)) {
+      return <ConvertingMedia />;
     }
     const isLandscape = imgOrientation === "landscape";
     return (
@@ -972,6 +982,8 @@ function areEqual(
     prev.message.messageText === next.message.messageText &&
     prev.message.updated === next.message.updated &&
     prev.message.isReadByAll === next.message.isReadByAll &&
+    prev.message.mediaPath === next.message.mediaPath &&
+    prev.message.mediaName === next.message.mediaName &&
     prev.isSender === next.isSender &&
     prev.isSelected === next.isSelected &&
     prev.isSelectionMode === next.isSelectionMode &&
