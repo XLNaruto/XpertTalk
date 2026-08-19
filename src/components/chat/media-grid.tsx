@@ -45,7 +45,7 @@ interface MediaGridProps {
   senderProfile?: string;
   isSelectionMode: boolean;
   isSelected: boolean;
-  onMediaClick: (mediaPath: string, mediaType: "image" | "video") => void;
+  onMediaClick: (mediaPath: string, mediaType: "image" | "video", messageId?: string) => void;
   onReply: (message: any) => void;
   onReplyAll: (messages: any[]) => void;
   onSelect: (message: any) => void;
@@ -177,7 +177,8 @@ function MediaGrid({
                   ? () =>
                       onMediaClick(
                         msg.mediaPath,
-                        msg.messageType === "VIDEO" ? "video" : "image"
+                        msg.messageType === "VIDEO" ? "video" : "image",
+                        msg.messageId
                       )
                   : undefined
               }

@@ -650,7 +650,13 @@ export function ChatSidebar() {
     }
     authLogout();
     clearCookies();
-    location.reload();
+    // Full reload so sockets, caches and in-memory stores are torn down — but
+    // land on the login screen. Reloading in place kept us on /chats, where
+    // PrivateRoutes sees no auth and bounces to /unauthorized ("Access
+    // denied"), which is for expired/rejected sessions, not a deliberate
+    // logout.
+    const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+    location.replace(`${base}/auth`);
   };
 
   // ── Computed lists ──

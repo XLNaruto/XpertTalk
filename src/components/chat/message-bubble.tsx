@@ -93,7 +93,7 @@ interface MessageBubbleProps {
   onSelect: (message: any) => void;
   onEnterSelectionMode: (message: any) => void;
   onForward: (message: any) => void;
-  onMediaClick: (mediaPath: string, mediaType: "image" | "video") => void;
+  onMediaClick: (mediaPath: string, mediaType: "image" | "video", messageId?: string) => void;
   onScrollToMessage?: (messageId: string) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
   onTogglePin: (messageId: string) => void;
@@ -504,7 +504,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             : // Portrait / square: fixed square box with color fill
               "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
         )}
-        onClick={() => onMediaClick(path, "image")}
+        onClick={() => onMediaClick(path, "image", message.messageId)}
         // Fetch + PNG-encode in the background on hover, so a later "Copy image"
         // is a pure clipboard write (~ms) instead of a 3-4s download+encode.
         onMouseEnter={() => prewarmImage(path)}
@@ -542,7 +542,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             : // Portrait / square: fixed square box with color fill
               "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
         )}
-        onClick={() => onMediaClick(path, "video")}
+        onClick={() => onMediaClick(path, "video", message.messageId)}
       >
         <video
           src={path}

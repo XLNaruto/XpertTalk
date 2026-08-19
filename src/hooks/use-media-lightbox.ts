@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 export interface MediaSlide {
   type: "image" | "video";
@@ -83,20 +83,38 @@ export default function useMediaLightbox(formattedMessages: any[]) {
   const [externalSlides, setExternalSlides] = useState<MediaSlide[]>([]);
   const [useExternal, setUseExternal] = useState(false);
 
-  const activeSlides = useExternal ? externalSlides : slides;
+  // Freeze the slide list for as long as the lightbox is open. `slides` is
+  // derived from the live message cache, so an incoming message or an older
+  // page loading in would otherwise shift every index under the open carousel
+  // and swap the visible image for a different one.
+  const frozenSlides = useRef<MediaSlide[] | null>(null);
+  if (!isOpen) frozenSlides.current = null;
+  const messageSlides = isOpen && frozenSlides.current ? frozenSlides.current : slides;
+
+  const activeSlides = useExternal ? externalSlides : messageSlides;
   const currentSlideResolved = activeSlides[currentIndex] as MediaSlide | undefined;
 
   const openMedia = useCallback(
-    (mediaPath: string, mediaType: "image" | "video") => {
-      const index = slides.findIndex((slide: any) => {
-        if (mediaType === "image")
-          return slide.type === "image" && slide.src === mediaPath;
-        return (
-          slide.type === "video" && slide.sources?.[0]?.src === mediaPath
-        );
-      });
+    (mediaPath: string, mediaType: "image" | "video", messageId?: string) => {
+      // Match on messageId first: the same file can appear in several messages
+      // (forwards, re-sends), so a mediaPath lookup lands on the first copy and
+      // opens the wrong slide. Fall back to the path when no id is supplied.
+      let index = messageId
+        ? slides.findIndex((slide) => slide.messageId === messageId)
+        : -1;
+
+      if (index < 0) {
+        index = slides.findIndex((slide: any) => {
+          if (mediaType === "image")
+            return slide.type === "image" && slide.src === mediaPath;
+          return (
+            slide.type === "video" && slide.sources?.[0]?.src === mediaPath
+          );
+        });
+      }
 
       if (index >= 0) {
+        frozenSlides.current = slides;
         setUseExternal(false);
         setCurrentIndex(index);
       } else {
@@ -116,7 +134,7 @@ export default function useMediaLightbox(formattedMessages: any[]) {
 
   /** Open lightbox with a full list of external media items, starting at the clicked one */
   const openMediaFromList = useCallback(
-    (mediaPath: string, _mediaType: "image" | "video", allItems: { mediaPath: string; mediaType: string; name?: string; senderChatuserId?: string; messageId?: string }[]) => {
+    (mediaPath: string, _mediaType: "image" | "video", allItems: { mediaPath: string; mediaType: string; name?: string; senderChatuserId?: string; messageId?: string }[], messageId?: string) => {
       const extSlides: MediaSlide[] = allItems
         .filter((item) => item.mediaType === "IMAGE" || item.mediaType === "VIDEO")
         .map((item): MediaSlide => {
@@ -143,9 +161,14 @@ export default function useMediaLightbox(formattedMessages: any[]) {
           };
         });
 
-      const clickedIndex = extSlides.findIndex((s) =>
-        s.type === "image" ? s.src === mediaPath : s.sources?.[0]?.src === mediaPath
-      );
+      let clickedIndex = messageId
+        ? extSlides.findIndex((s) => s.messageId && s.messageId === messageId)
+        : -1;
+      if (clickedIndex < 0) {
+        clickedIndex = extSlides.findIndex((s) =>
+          s.type === "image" ? s.src === mediaPath : s.sources?.[0]?.src === mediaPath
+        );
+      }
 
       setExternalSlides(extSlides);
       setUseExternal(true);

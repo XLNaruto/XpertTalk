@@ -798,8 +798,8 @@ export function ChatArea() {
   }, []);
 
   const handleMediaClickCb = useCallback(
-    (mediaPath: string, mediaType: "image" | "video") =>
-      handleMediaClick(mediaPath, mediaType),
+    (mediaPath: string, mediaType: "image" | "video", messageId?: string) =>
+      handleMediaClick(mediaPath, mediaType, messageId),
     [handleMediaClick]
   );
 

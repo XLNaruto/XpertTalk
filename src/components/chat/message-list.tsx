@@ -31,7 +31,7 @@ interface MessageListProps {
   onEnterSelectionModeMultiple: (msgs: any[]) => void;
   onForward: (msg: any) => void;
   onForwardMultiple: (msgs: any[]) => void;
-  onMediaClick: (path: string, type: "image" | "video") => void;
+  onMediaClick: (path: string, type: "image" | "video", messageId?: string) => void;
   isSelectionMode: boolean;
   selectedMessages: any[];
   readMessagesApi: (messageId: string, created: string, talkId: string) => void;
