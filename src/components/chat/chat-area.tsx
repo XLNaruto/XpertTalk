@@ -12,6 +12,8 @@ import { getEncodedCookie, encryptUrlData } from "@/lib/encryption";
 import { apiHeader, postData } from "@/lib/api-helper";
 import { toast } from "sonner";
 import { unformatMentionsFromMessage } from "@/lib/message-formatters";
+import { getMediaItems } from "@/lib/media-items";
+import { canMuteTalks, isTalkMuted, muteStatusLabel } from "@/lib/mute";
 import { MessageSquare, Sparkles, Download, Trash2, Forward, Pin, PinOff, Reply, Copy } from "lucide-react";
 import { copyImageToClipboard, prewarmImage } from "@/lib/copy-image";
 import ChatHeader from "@/components/chat/chat-header";
@@ -73,6 +75,12 @@ export function ChatArea() {
   const handleCreateGroupClose = useUIStore((s) => s.handleCreateGroupClose);
   // User list store (sidebar)
   const setUserList = useUserListStore((s) => s.setUserList);
+  const toggleMute = useUserListStore((s) => s.toggleMute);
+  // The talk list row is the source of truth for mute state — `find` returns the
+  // existing element, so this selector stays reference-stable.
+  const activeTalkRow = useUserListStore((s) =>
+    s.userList.find((u: any) => u.talkId === talkId)
+  );
 
   // Auth info
   const xtoken = getEncodedCookie("token") || "";
@@ -85,6 +93,7 @@ export function ChatArea() {
   const [replyMessageId, setReplyMessageId] = useState<string | null>(null);
   const [replyAllMessageIds, setReplyAllMessageIds] = useState<string[]>([]);
   const [isEditing, setIsEditing] = useState(false);
+  const [editingHasMedia, setEditingHasMedia] = useState(false);
   const [isReply, setIsReply] = useState(false);
   const [groupMemberCount, setGroupMemberCount] = useState(0);
   const [groupMembers, setGroupMembers] = useState<any[]>([]);
@@ -161,16 +170,10 @@ export function ChatArea() {
           getMessagesList(talkId, lastMsg.messageId, "newer", -1);
         }
       }
-      // Only auto-mark last message as read if there are NO unreads.
-      // When there are unreads, let viewport-based marking (handleRangeChanged) handle it
-      // so the user sees the "Unread messages" label and scroll stops at the first unread.
-      const hasUnreads = messages.some(
-        (m: any) => m.unread === 1 && String(m.senderChatuserId) !== String(chatuserId)
-      );
-      if (!hasUnreads) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg) readMessagesApi(lastMsg.messageId, lastMsg.created, talkId);
-      }
+      // Deliberately NO markRead here. Reading is a consequence of the user
+      // actually seeing messages (MessageList marks the newest visible unread),
+      // not of the talk being open — a markRead on open would instantly rewind
+      // any "mark as unread" the user just made.
     },
     onNewMessage: (newMessage) => {
       const isSelf = String(chatuserId) === String(newMessage?.senderChatuserId);
@@ -302,51 +305,122 @@ export function ChatArea() {
     [talkId, setUserList]
   );
 
+  // ── Mute / unmute the open talk ──
+  // Muting goes through the header's duration picker (same presets as the chat
+  // list); unmuting is a single click, so `muteUntil` is null there.
+  // Admin-only, matching `POST /chat/talk/mute`.
+  const isMuted = isTalkMuted(activeTalkRow);
+
+  const handleToggleMute = useCallback(
+    async (next: boolean, muteUntil: string | null = null) => {
+      if (!talkId) return;
+      const ok = await toggleMute(talkId, next, next ? muteUntil : null);
+      if (!ok) {
+        toast.error(next ? "Couldn't mute this chat" : "Couldn't unmute this chat");
+        return;
+      }
+      if (!next) {
+        toast.success("Notifications on");
+        return;
+      }
+      // "Muted until 9:30 PM" / "Muted" — same wording as the header tooltip.
+      toast.success(muteStatusLabel({ isMuted: true, muteUntil }) || "Notifications muted");
+    },
+    [talkId, toggleMute]
+  );
+
+  // ── Mark as unread ──
+
+  // Rewinds this user's `lastReadAt` to the target message, so it and everything
+  // newer count as unread again. Per-user and idempotent — nobody else is
+  // notified and no read receipt is withdrawn.
+  const handleMarkUnread = useCallback(
+    (msg: any) => {
+      const messageId = msg?.messageId;
+      if (!messageId) return;
+      if (msg.isDeleted) {
+        // Deleted messages are excluded from every unread count, so the server
+        // rejects this rather than silently doing nothing.
+        toast.error("Can't mark a deleted message as unread");
+        return;
+      }
+      // NB: check the live socket via emit's return value, never a captured
+      // `isConnected` — this callback is frozen inside memoised bubbles.
+      const sent = emit("markUnread", { messageId }, (ack: any) => {
+        if (!ack?.success) {
+          toast.error(ack?.error || "Couldn't mark as unread");
+          return;
+        }
+
+        // Apply locally: the target and everything newer flips back to unread.
+        dispatchMessage({ type: "MARK_UNREAD", payload: { messageId } });
+        if (typeof ack.unreadCount === "number" && talkId) {
+          setUserList((prev: any[]) =>
+            prev.map((u: any) =>
+              u.talkId === talkId ? { ...u, unreadCount: ack.unreadCount } : u
+            )
+          );
+        }
+
+        // The user stays in the thread. MessageList stops read-on-view for the
+        // rest of this visit (it reacts to `unreadMarkToken`), so the messages
+        // just marked aren't re-read the moment they scroll past. Re-entering
+        // the chat — or a reload — restores normal read-on-view.
+        toast.success("Marked as unread");
+      });
+
+      if (!sent) toast.error("You're offline — try again once reconnected");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [emit, dispatchMessage, talkId, setUserList]
+  );
+
   // ── Delete message ──
 
   const deleteMessage = useCallback(
     (messageId: string) => {
-      if (isConnected && messageId) {
-        emit("deleteMessage", { messageId }, (ack: any) => {
+      if (messageId) {
+        const sent = emit("deleteMessage", { messageId }, (ack: any) => {
           if (!ack?.success) {
             toast.error("Failed to delete message");
           }
         });
+        if (!sent) toast.error("You're offline — try again once reconnected");
       }
       setEditingMessageId(null);
       setMessage("");
     },
-    [isConnected, emit]
+    [emit]
   );
 
   // ── Toggle reaction ──
 
   const handleToggleReaction = useCallback(
     (messageId: string, reaction: string) => {
-      if (isConnected && messageId) {
-        emit("toggleReaction", { messageId, reaction }, (ack: any) => {
-          if (!ack?.success) {
-            toast.error("Failed to toggle reaction");
-          }
-        });
-      }
+      if (!messageId) return;
+      const sent = emit("toggleReaction", { messageId, reaction }, (ack: any) => {
+        if (!ack?.success) {
+          toast.error("Failed to toggle reaction");
+        }
+      });
+      if (!sent) toast.error("You're offline — try again once reconnected");
     },
-    [isConnected, emit]
+    [emit]
   );
 
   // ── Toggle pin ──
 
   const handleTogglePin = useCallback(
     (messageId: string) => {
-      if (isConnected && messageId) {
-        emit("togglePin", { messageId }, (ack: any) => {
-          if (!ack?.success) {
-            toast.error("Failed to toggle pin");
-          }
-        });
-      }
+      if (!messageId) return;
+      const sent = emit("togglePin", { messageId }, (ack: any) => {
+        if (!ack?.success) {
+          toast.error("Failed to toggle pin");
+        }
+      });
+      if (!sent) toast.error("You're offline — try again once reconnected");
     },
-    [isConnected, emit]
+    [emit]
   );
 
   // ── Start private connection ──
@@ -415,6 +489,7 @@ export function ChatArea() {
     setMessage("");
     setEditingMessageId(null);
     setIsEditing(false);
+    setEditingHasMedia(false);
     setReplyMessage({});
     setReplyMessageId(null);
     setReplyAllMessageIds([]);
@@ -531,21 +606,28 @@ export function ChatArea() {
   // ── Edit/Reply handlers ──
 
   const startEditing = useCallback((msg: any) => {
-    if (msg.messageId && msg.messageText) {
-      setReplyMessageId(null);
-      setReplyMessage({});
-      setReplyAllMessageIds([]);
-      setIsReply(false);
-      setEditingMessageId(msg.messageId);
-      setIsEditing(true);
-      setMessage(unformatMentionsFromMessage(msg.messageText));
-      setTimeout(() => messageInputRef.current?.focus(), 50);
-    }
+    if (!msg?.messageId) return;
+    // A media message can be edited too — its caption lives in `messageText`,
+    // and an uncaptioned attachment starts from an empty composer so the user
+    // can add one.
+    const hasAttachments = getMediaItems(msg).length > 0;
+    if (!msg.messageText && !hasAttachments) return;
+
+    setReplyMessageId(null);
+    setReplyMessage({});
+    setReplyAllMessageIds([]);
+    setIsReply(false);
+    setEditingMessageId(msg.messageId);
+    setIsEditing(true);
+    setMessage(unformatMentionsFromMessage(msg.messageText || ""));
+    setEditingHasMedia(hasAttachments);
+    setTimeout(() => messageInputRef.current?.focus(), 50);
   }, []);
 
   const cancelEditing = useCallback(() => {
     setEditingMessageId(null);
     setIsEditing(false);
+    setEditingHasMedia(false);
     setMessage("");
   }, []);
 
@@ -597,14 +679,20 @@ export function ChatArea() {
     setIsReply(false);
   }, []);
 
-  const handleSendComplete = useCallback(() => {
+  const handleSendComplete = useCallback((result?: { isEdit?: boolean }) => {
     setMessage("");
     setEditingMessageId(null);
     setIsEditing(false);
+    setEditingHasMedia(false);
     setReplyMessage({});
     setReplyMessageId(null);
     setReplyAllMessageIds([]);
     setIsReply(false);
+
+    // An edit changes a message in place — nothing was appended, so leave the
+    // view exactly where the user was editing and don't touch read state.
+    if (result?.isEdit) return;
+
     // Mark all unread messages as read when user sends a message
     messageListRef.current?.markAllAsRead();
     setTimeout(() => messageListRef.current?.scrollToBottom(), 100);
@@ -798,8 +886,12 @@ export function ChatArea() {
   }, []);
 
   const handleMediaClickCb = useCallback(
-    (mediaPath: string, mediaType: "image" | "video", messageId?: string) =>
-      handleMediaClick(mediaPath, mediaType, messageId),
+    (
+      mediaPath: string,
+      mediaType: "image" | "video",
+      messageId?: string,
+      mediaId?: string
+    ) => handleMediaClick(mediaPath, mediaType, messageId, mediaId),
     [handleMediaClick]
   );
 
@@ -877,6 +969,9 @@ export function ChatArea() {
         onSearchPrev={handleSearchPrev}
         onPinnedClick={() => setIsPinnedSheetOpen(true)}
         onMediaListClick={() => setIsMediaListOpen(true)}
+        isMuted={isMuted}
+        muteLabel={muteStatusLabel(activeTalkRow)}
+        onToggleMute={canMuteTalks ? handleToggleMute : undefined}
       />
 
       {/* Message list */}
@@ -908,6 +1003,7 @@ export function ChatArea() {
           onUnreadCountChange={handleUnreadCountChange}
           onToggleReaction={handleToggleReaction}
           onTogglePin={handleTogglePin}
+          onMarkUnread={handleMarkUnread}
         />
         <DragOverlay isVisible={isFileDragging} />
       </div>
@@ -941,6 +1037,7 @@ export function ChatArea() {
         onSend={handleSendComplete}
         isEditing={isEditing}
         editingMessageId={editingMessageId}
+        editingHasMedia={editingHasMedia}
         onCancelEdit={cancelEditing}
         isReply={isReply}
         replyMessage={replyMessage}
@@ -1190,14 +1287,17 @@ export function ChatArea() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
                 if (!currentSlide) return;
+                // An album is one delete target — deleting removes every
+                // attachment, so all of that message's slides disappear.
                 deleteMessage(currentSlide.messageId);
                 setLightboxDeleteOpen(false);
-                if (mediaSlides.length <= 1) {
+                const remaining = mediaSlides.filter(
+                  (s: any) => s.messageId !== currentSlide.messageId
+                ).length;
+                if (remaining === 0) {
                   closeLightbox();
                 } else {
-                  setCurrentIndex((prev) =>
-                    prev >= mediaSlides.length - 1 ? prev - 1 : prev
-                  );
+                  setCurrentIndex((prev) => (prev >= remaining ? remaining - 1 : prev));
                 }
               }}
             >

@@ -10,6 +10,7 @@ import {
   Download,
   SquareCheck,
   SmilePlus,
+  MailOpen,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -36,6 +37,7 @@ import { MessageReactions } from "@/components/chat/message-reactions";
 import { ReactionDetailsDialog } from "@/components/modals/reaction-details-dialog";
 import { isConvertingMedia } from "@/lib/media-convert";
 import { ConvertingMedia } from "@/components/chat/converting-media";
+import { downloadMediaItems } from "@/lib/download-media";
 
 interface MediaGridProps {
   messages: any[];
@@ -45,7 +47,12 @@ interface MediaGridProps {
   senderProfile?: string;
   isSelectionMode: boolean;
   isSelected: boolean;
-  onMediaClick: (mediaPath: string, mediaType: "image" | "video", messageId?: string) => void;
+  onMediaClick: (
+    mediaPath: string,
+    mediaType: "image" | "video",
+    messageId?: string,
+    mediaId?: string
+  ) => void;
   onReply: (message: any) => void;
   onReplyAll: (messages: any[]) => void;
   onSelect: (message: any) => void;
@@ -55,6 +62,7 @@ interface MediaGridProps {
   onForwardMultiple: (messages: any[]) => void;
   onDeleteAll: (messageIds: string[]) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
+  onMarkUnread: (message: any) => void;
 }
 
 // ── Selection checkbox ──
@@ -92,6 +100,7 @@ function MediaGrid({
   onForwardMultiple,
   onDeleteAll,
   onToggleReaction,
+  onMarkUnread,
 }: MediaGridProps) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reactionDetailOpen, setReactionDetailOpen] = useState(false);
@@ -140,7 +149,8 @@ function MediaGrid({
       className={cn(
         "relative w-[300px] max-w-full overflow-hidden rounded-2xl [.dark_&]:shadow-none!",
         isSender ? "rounded-tr-[4px]" : "rounded-tl-[4px]",
-        isSelected && "ring-2 ring-primary/40"
+        isSelected && "ring-2 ring-primary/40",
+        isSelectionMode && "cursor-pointer"
       )}
       style={
         isSender
@@ -178,7 +188,8 @@ function MediaGrid({
                       onMediaClick(
                         msg.mediaPath,
                         msg.messageType === "VIDEO" ? "video" : "image",
-                        msg.messageId
+                        msg.messageId,
+                        msg.mediaId
                       )
                   : undefined
               }
@@ -357,25 +368,16 @@ function MediaGrid({
               <Forward className="h-4 w-4" /> Forward
             </ContextMenuItem>
             <ContextMenuItem
-              onClick={() => {
-                messages.forEach((msg: any) => {
-                  if (msg.mediaPath) {
-                    fetch(msg.mediaPath)
-                      .then((res) => res.blob())
-                      .then((blob) => {
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = msg.mediaName || msg.mediaPath.split("/").pop() || "media";
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                      })
-                      .catch(() => window.open(msg.mediaPath, "_blank"));
-                  }
-                });
-              }}
+              onClick={() =>
+                downloadMediaItems(
+                  messages
+                    .filter((msg: any) => msg.mediaPath)
+                    .map((msg: any) => ({
+                      mediaPath: msg.mediaPath,
+                      mediaName: msg.mediaName,
+                    }))
+                )
+              }
               className="gap-2 rounded-lg px-2.5 py-2 text-sm"
             >
               <Download className="h-4 w-4" /> Download All
@@ -394,6 +396,14 @@ function MediaGrid({
                 className="gap-2 rounded-lg px-2.5 py-2 text-sm"
               >
                 <SmilePlus className="h-4 w-4" /> View Reactions
+              </ContextMenuItem>
+            )}
+            {!isSender && (
+              <ContextMenuItem
+                onClick={() => onMarkUnread(messages[0])}
+                className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+              >
+                <MailOpen className="h-4 w-4" /> Mark as unread
               </ContextMenuItem>
             )}
             {isSender && canDeleteAll && (

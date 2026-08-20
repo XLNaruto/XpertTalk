@@ -4,6 +4,7 @@ import { format } from "date-fns";
 import { apiHeader, getData } from "@/lib/api-helper";
 import { getEncodedCookie } from "@/lib/encryption";
 import { formatPreview } from "@/lib/message-formatters";
+import { previewLabel } from "@/lib/media-items";
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "@/components/shared/user-avatar";
 import {
@@ -92,27 +93,9 @@ export function PinnedMessagesSheet({
     return msg.messageType;
   };
 
-  const getMessagePreview = (msg: any) => {
-    const type = getEffectiveType(msg);
-    if (type === "IMAGE") {
-      const name = msg.forwardFromMessageId
-        ? msg.forwardMessage?.mediaName
-        : msg.mediaName;
-      return name || "Photo";
-    }
-    if (type === "VIDEO") return "Video";
-    if (type === "DOCUMENT") {
-      const name = msg.forwardFromMessageId
-        ? msg.forwardMessage?.mediaName
-        : msg.mediaName;
-      return name || "Document";
-    }
-    // For text: use forwarded text if it's a forwarded message
-    if (msg.forwardFromMessageId) {
-      return msg.forwardedMessageText || msg.forwardMessage?.messageText || "";
-    }
-    return msg.messageText || "";
-  };
+  // Caption first, then a media description ("3 photos" for an album). A media
+  // message can carry text, so this can't be decided from `messageType`.
+  const getMessagePreview = (msg: any) => previewLabel(msg);
 
   const getMessageIcon = (msg: any) => {
     const type = getEffectiveType(msg);

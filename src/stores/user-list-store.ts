@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { apiHeader, getData } from '@/lib/api-helper';
+import { apiHeader, getData, postData } from '@/lib/api-helper';
+import logger from '@/lib/logger';
 
 interface UserListStore {
   userList: any[];
@@ -9,6 +10,12 @@ interface UserListStore {
   setReceiverData: (data: any) => void;
   getUserList: () => Promise<void>;
   getUserProfile: (talkId: string) => Promise<any | null>;
+  /**
+   * Mute or unmute a talk. Lives in the store so the sidebar and the chat
+   * header share one implementation and one optimistic update. Resolves false
+   * when the server refuses (mute is admin-only), after rolling the row back.
+   */
+  toggleMute: (talkId: string, isMuted: boolean, muteUntil?: string | null) => Promise<boolean>;
   applyPresence: (statuses: { chatuserId: number | string; isActive: boolean }[]) => void;
 }
 
@@ -54,6 +61,42 @@ export const useUserListStore = create<UserListStore>((set, get) => ({
     });
     return changed ? { userList: next } : {};
   }),
+
+  toggleMute: async (talkId, isMuted, muteUntil = null) => {
+    if (!talkId) return false;
+    const previous = get().userList.find((u: any) => u.talkId === talkId);
+
+    // Optimistic — the toggle should feel instant in the list and the header.
+    set((state) => ({
+      userList: state.userList.map((u: any) =>
+        u.talkId === talkId ? { ...u, isMuted, muteUntil: isMuted ? muteUntil : null } : u
+      ),
+    }));
+
+    try {
+      const response: any = await postData(
+        'chat/talk/mute',
+        { id: talkId, isMuted, ...(isMuted ? { muteUntil } : {}) },
+        apiHeader(false, 0)
+      );
+      if (String(response?.status) === '200' && String(response?.data?.status) === '200') {
+        return true;
+      }
+      logger.warn('toggleMute rejected:', response?.data?.message);
+    } catch (error) {
+      logger.error('toggleMute failed:', error);
+    }
+
+    // Roll back to exactly what the row held before.
+    set((state) => ({
+      userList: state.userList.map((u: any) =>
+        u.talkId === talkId
+          ? { ...u, isMuted: previous?.isMuted ?? false, muteUntil: previous?.muteUntil ?? null }
+          : u
+      ),
+    }));
+    return false;
+  },
 
   getUserProfile: async (talkId: string) => {
     const response: any = await getData(

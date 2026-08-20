@@ -16,15 +16,24 @@ import logger from "@/lib/logger";
 import { EmojiPickerPopover } from "@/components/chat/emoji-picker-popover";
 import { FilePreview } from "@/components/chat/file-preview";
 import { MentionList } from "@/components/chat/mention-list";
+import { getMediaCount, previewLabel } from "@/lib/media-items";
+import { extractFirstUrl, getCachedLinkPreview } from "@/lib/link-preview";
+import useLinkPreview from "@/hooks/use-link-preview";
+import LinkPreviewCard from "@/components/chat/link-preview-card";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 // ── Types ──
 
 export interface MessageInputProps {
   message: string;
   onMessageChange: (message: string) => void;
-  onSend: () => void;
+  // `isEdit` tells the parent this was an in-place edit, not a new message —
+  // an edit must not scroll the list or mark the chat read.
+  onSend: (result?: { isEdit?: boolean }) => void;
   isEditing: boolean;
   editingMessageId: string | null;
+  /** True when the message being edited carries attachments (editing a caption). */
+  editingHasMedia?: boolean;
   onCancelEdit: () => void;
   isReply: boolean;
   replyMessage: any;
@@ -111,6 +120,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       onSend,
       isEditing,
       editingMessageId,
+      editingHasMedia,
       onCancelEdit,
       isReply,
       replyMessage,
@@ -187,6 +197,35 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       isImage,
     } = useFileUpload({ emit, isConnected });
 
+    // ── Link preview while typing ──
+    // Debounced so a URL being typed character by character doesn't fire a
+    // request per keystroke. Suppressed for attachments (the caption's card
+    // would clash with the album grid, matching how bubbles render).
+    const debouncedMessage = useDebouncedValue(message, 700);
+    const [dismissedUrl, setDismissedUrl] = useState<string | null>(null);
+
+    // An already-resolved URL skips the debounce entirely — its card comes
+    // straight from the module cache, so re-opening edit mode on a link that was
+    // just previewed shows the card at once instead of after 700ms of nothing.
+    const liveUrl = extractFirstUrl(message);
+    const previewText =
+      liveUrl && getCachedLinkPreview(liveUrl) ? message : debouncedMessage;
+
+    const composerPreview = useLinkPreview(
+      previewText,
+      selectedFiles.length === 0
+    );
+    const composerUrl = extractFirstUrl(previewText);
+    // Visibility is gated on the LIVE text, not the debounced copy: clearing the
+    // composer (send, or closing edit mode) empties `message` at once, and
+    // waiting out the 700ms debounce left the card hanging over an empty box.
+    // Only the card's CONTENT stays debounced, so typing still doesn't refetch.
+    const showComposerPreview =
+      !!composerPreview &&
+      !!composerUrl &&
+      !!liveUrl &&
+      dismissedUrl !== composerUrl;
+
     // ── Draft hook ──
     const { clearDraft } = useDraft({
       talkId,
@@ -231,6 +270,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       clearFiles();
       setFilteredMentions([]);
       setShowMentionList(false);
+      setDismissedUrl(null);
       // Focus input on chat change and initial load
       setTimeout(() => textareaRef.current?.focus(), 100);
     }, [talkId, clearFiles]);
@@ -360,14 +400,20 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       if (isUploading) return;
 
       const currentMessage = message;
+      const wasEdit = isEditing && !!editingMessageId && selectedFiles.length === 0;
 
       try {
         if (selectedFiles.length > 0) {
-          await uploadFiles(talkId, replyMessageId);
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        if (currentMessage.trim()) {
+          // Attachments and the typed text go out as ONE message — the text is
+          // the album's caption, not a second bubble.
+          const caption = currentMessage.trim()
+            ? formatMessageWithMentions(currentMessage.trim(), mentionMembers)
+            : "";
+          const sent = await uploadFiles(talkId, replyMessageId, caption);
+          // Upload failed (e.g. one file over its cap rejects the whole batch,
+          // nothing stored) — keep the composer as-is so the user can retry.
+          if (!sent) return;
+        } else if (currentMessage.trim()) {
           if (isEditing && editingMessageId) {
             emit("editMessage", {
               messageId: editingMessageId,
@@ -403,9 +449,12 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
 
         emitStopTyping();
         clearDraft();
+        // The dismissal belongs to the draft that was just sent — keeping it
+        // would silently suppress the card the next time the same URL is typed.
+        setDismissedUrl(null);
         setShowMentionList(false);
         setFilteredMentions([]);
-        onSend();
+        onSend({ isEdit: wasEdit });
         textareaRef.current?.focus();
       } catch (error) {
         logger.error("Error in handleSendClick:", error);
@@ -520,24 +569,19 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
               <p className="text-xs font-semibold text-primary">
                 {replyMessage.senderName}
               </p>
+              {/* Caption first, then a media description — a media message can
+                  carry text, so `messageType` says nothing about that. */}
               <p
                 className="truncate text-xs text-muted-foreground/70"
                 dangerouslySetInnerHTML={{
-                  __html:
-                    replyMessage.messageType === "TEXT"
-                      ? formatPreview(replyMessage.messageText || "")
-                      : replyMessage.messageType === "IMAGE"
-                        ? "Photo"
-                        : replyMessage.messageType === "VIDEO"
-                          ? "Video"
-                          : replyMessage.mediaName || "Document",
+                  __html: formatPreview(previewLabel(replyMessage)),
                 }}
               />
             </div>
             {(replyMessage.messageType === "IMAGE" ||
               replyMessage.messageType === "VIDEO") &&
               replyMessage.mediaPath && (
-                <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md">
+                <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-md">
                   {replyMessage.messageType === "IMAGE" ? (
                     <img
                       src={replyMessage.mediaPath}
@@ -554,6 +598,12 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
                       preload="metadata"
                       className="h-full w-full object-cover"
                     />
+                  )}
+                  {/* Previews carry only the FIRST attachment — badge the rest. */}
+                  {getMediaCount(replyMessage) > 1 && (
+                    <span className="absolute bottom-0 right-0 rounded-tl-md bg-black/60 px-1 text-[9px] font-bold leading-[13px] text-white">
+                      +{getMediaCount(replyMessage) - 1}
+                    </span>
                   )}
                 </div>
               )}
@@ -574,7 +624,9 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
               <Pencil className="h-4 w-4 text-primary" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-primary">Editing</p>
+              <p className="text-xs font-semibold text-primary">
+                {editingHasMedia ? "Editing caption" : "Editing"}
+              </p>
               <p
                 className="truncate text-xs text-muted-foreground/70"
                 dangerouslySetInnerHTML={{
@@ -586,6 +638,23 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
               type="button"
               onClick={onCancelEdit}
               className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Link preview of the URL being typed. The row shape keeps the
+            composer short — the stacked hero card ate most of the chat's
+            vertical space just to preview one link. */}
+        {showComposerPreview && (
+          <div className="flex items-start gap-2 px-4 pt-3">
+            <LinkPreviewCard preview={composerPreview} bare horizontal />
+            <button
+              type="button"
+              title="Remove preview"
+              onClick={() => setDismissedUrl(composerUrl)}
+              className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -622,7 +691,11 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
               ref={textareaRef}
               className="max-h-[150px] min-h-[24px] flex-1 resize-none border-0 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
               rows={1}
-              placeholder="Type a message..."
+              placeholder={
+                selectedFiles.length > 0 || (isEditing && editingHasMedia)
+                  ? "Add a caption..."
+                  : "Type a message..."
+              }
               value={message}
               onChange={handleMessageChange}
               onKeyDown={handleKeyDown}

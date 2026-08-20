@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { getMediaItems, isViewable } from "@/lib/media-items";
 
 export interface MediaSlide {
   type: "image" | "video";
@@ -9,6 +10,8 @@ export interface MediaSlide {
   poster?: string;
   // Extra metadata for delete/download/forward
   messageId: string;
+  /** Identifies WHICH attachment of the message this slide is. */
+  mediaId?: string;
   forwardFromMessageId?: string;
   mediaPath: string;
   mediaName?: string;
@@ -21,64 +24,40 @@ export default function useMediaLightbox(formattedMessages: any[]) {
   const [isOpen, setIsOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  const slides = useMemo(
-    () =>
-      formattedMessages
-        .filter((msg) => {
-          const effectiveType = msg.forwardFromMessageId
-            ? msg.forwardMessage?.messageType
-            : msg.messageType;
-          const effectivePath = msg.forwardFromMessageId
-            ? msg.forwardMessage?.mediaPath
-            : msg.mediaPath;
-          return (
-            (effectiveType === "IMAGE" || effectiveType === "VIDEO") &&
-            effectivePath &&
-            !msg.isDeleted
-          );
-        })
-        .map((msg): MediaSlide => {
-          const effectiveType = msg.forwardFromMessageId
-            ? msg.forwardMessage?.messageType
-            : msg.messageType;
-          const effectivePath = msg.forwardFromMessageId
-            ? msg.forwardMessage?.mediaPath
-            : msg.mediaPath;
-          const effectiveName = msg.forwardFromMessageId
-            ? msg.forwardMessage?.mediaName
-            : msg.mediaName;
-
-          if (effectiveType === "IMAGE") {
-            return {
-              type: "image" as const,
-              src: effectivePath,
-              messageId: msg.messageId,
-              forwardFromMessageId: msg.forwardFromMessageId,
-              mediaPath: effectivePath,
-              mediaName: effectiveName,
-              senderChatuserId: msg.senderChatuserId,
-              isPinned: msg.isPinned,
-              created: msg.created,
-            };
-          }
-          return {
+  // One slide per ATTACHMENT, not per message: a message can carry up to 10, so
+  // paging through the chat's media has to walk album items too.
+  const slides = useMemo(() => {
+    const out: MediaSlide[] = [];
+    for (const msg of formattedMessages) {
+      if (!msg || msg.isDeleted) continue;
+      for (const item of getMediaItems(msg)) {
+        if (!isViewable(item) || !item.mediaPath) continue;
+        const common = {
+          messageId: msg.messageId,
+          mediaId: item.mediaId,
+          forwardFromMessageId: msg.forwardFromMessageId,
+          mediaPath: item.mediaPath,
+          mediaName: item.mediaName,
+          senderChatuserId: msg.senderChatuserId,
+          isPinned: msg.isPinned,
+          created: msg.created,
+        };
+        if (item.mediaType === "VIDEO") {
+          out.push({
             type: "video" as const,
             width: 1280,
             height: 720,
-            sources: [{ src: effectivePath, type: "video/mp4" }],
+            sources: [{ src: item.mediaPath, type: "video/mp4" }],
             poster: msg.thumbnailPath || "",
-            messageId: msg.messageId,
-            forwardFromMessageId: msg.forwardFromMessageId,
-            mediaPath: effectivePath,
-            mediaName: effectiveName,
-            senderChatuserId: msg.senderChatuserId,
-            isPinned: msg.isPinned,
-            created: msg.created,
-          };
-        }),
-    [formattedMessages]
-  );
-
+            ...common,
+          });
+        } else {
+          out.push({ type: "image" as const, src: item.mediaPath, ...common });
+        }
+      }
+    }
+    return out;
+  }, [formattedMessages]);
 
   const [externalSlides, setExternalSlides] = useState<MediaSlide[]>([]);
   const [useExternal, setUseExternal] = useState(false);
@@ -95,13 +74,23 @@ export default function useMediaLightbox(formattedMessages: any[]) {
   const currentSlideResolved = activeSlides[currentIndex] as MediaSlide | undefined;
 
   const openMedia = useCallback(
-    (mediaPath: string, mediaType: "image" | "video", messageId?: string) => {
-      // Match on messageId first: the same file can appear in several messages
-      // (forwards, re-sends), so a mediaPath lookup lands on the first copy and
-      // opens the wrong slide. Fall back to the path when no id is supplied.
-      let index = messageId
-        ? slides.findIndex((slide) => slide.messageId === messageId)
+    (
+      mediaPath: string,
+      mediaType: "image" | "video",
+      messageId?: string,
+      mediaId?: string
+    ) => {
+      // Match on mediaId first — an album shares one messageId across up to 10
+      // slides, so a messageId lookup would always open the first attachment.
+      let index = mediaId
+        ? slides.findIndex((slide) => slide.mediaId === mediaId)
         : -1;
+
+      // Then messageId: the same file can appear in several messages (forwards,
+      // re-sends), so a mediaPath lookup lands on the wrong copy.
+      if (index < 0 && messageId) {
+        index = slides.findIndex((slide) => slide.messageId === messageId);
+      }
 
       if (index < 0) {
         index = slides.findIndex((slide: any) => {
@@ -134,7 +123,7 @@ export default function useMediaLightbox(formattedMessages: any[]) {
 
   /** Open lightbox with a full list of external media items, starting at the clicked one */
   const openMediaFromList = useCallback(
-    (mediaPath: string, _mediaType: "image" | "video", allItems: { mediaPath: string; mediaType: string; name?: string; senderChatuserId?: string; messageId?: string }[], messageId?: string) => {
+    (mediaPath: string, _mediaType: "image" | "video", allItems: { mediaPath: string; mediaType: string; name?: string; senderChatuserId?: string; messageId?: string; mediaId?: string }[], messageId?: string, mediaId?: string) => {
       const extSlides: MediaSlide[] = allItems
         .filter((item) => item.mediaType === "IMAGE" || item.mediaType === "VIDEO")
         .map((item): MediaSlide => {
@@ -146,6 +135,7 @@ export default function useMediaLightbox(formattedMessages: any[]) {
               height: 720,
               sources: [{ src: item.mediaPath, type: "video/mp4" }],
               messageId: item.messageId || "",
+              mediaId: item.mediaId,
               mediaPath: item.mediaPath,
               mediaName: item.name || item.mediaPath.split("/").pop() || "download",
               senderChatuserId: item.senderChatuserId || "",
@@ -155,15 +145,23 @@ export default function useMediaLightbox(formattedMessages: any[]) {
             type: "image",
             src: item.mediaPath,
             messageId: item.messageId || "",
+            mediaId: item.mediaId,
             mediaPath: item.mediaPath,
             mediaName: item.name || item.mediaPath.split("/").pop() || "download",
             senderChatuserId: item.senderChatuserId || "",
           };
         });
 
-      let clickedIndex = messageId
-        ? extSlides.findIndex((s) => s.messageId && s.messageId === messageId)
+      // The gallery returns one row per attachment, so album rows share a
+      // messageId — mediaId is what identifies the clicked one.
+      let clickedIndex = mediaId
+        ? extSlides.findIndex((s) => s.mediaId && s.mediaId === mediaId)
         : -1;
+      if (clickedIndex < 0 && messageId) {
+        clickedIndex = extSlides.findIndex(
+          (s) => s.messageId && s.messageId === messageId
+        );
+      }
       if (clickedIndex < 0) {
         clickedIndex = extSlides.findIndex((s) =>
           s.type === "image" ? s.src === mediaPath : s.sources?.[0]?.src === mediaPath

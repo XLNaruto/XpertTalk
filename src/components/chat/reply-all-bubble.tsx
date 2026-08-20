@@ -8,6 +8,7 @@ import {
   CheckCheck,
   SmilePlus,
   Play,
+  MailOpen,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -52,6 +53,7 @@ interface ReplyAllBubbleProps {
   onEnterSelectionModeMultiple: (messages: any[]) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
   onScrollToMessage?: (messageId: string) => void;
+  onMarkUnread: (message: any) => void;
 }
 
 // ── Grid of replied-to media (mini preview inside the reply chip) ──
@@ -141,6 +143,7 @@ const ReplyAllBubble: React.FC<ReplyAllBubbleProps> = ({
   onEnterSelectionModeMultiple,
   onToggleReaction,
   onScrollToMessage,
+  onMarkUnread,
 }) => {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reactionDetailOpen, setReactionDetailOpen] = useState(false);
@@ -225,7 +228,8 @@ const ReplyAllBubble: React.FC<ReplyAllBubbleProps> = ({
                     isSender
                       ? "rounded-tr-[4px] bubble-sent"
                       : "rounded-tl-[4px] bubble-recv",
-                    isSelected && "ring-2 ring-primary/40"
+                    isSelected && "ring-2 ring-primary/40",
+                    isSelectionMode && "cursor-pointer"
                   )}
                   onClick={
                     isSelectionMode ? () => onSelectMultiple(messages) : undefined
@@ -370,6 +374,14 @@ const ReplyAllBubble: React.FC<ReplyAllBubbleProps> = ({
                 className="gap-2 rounded-lg px-2.5 py-2 text-sm"
               >
                 <SmilePlus className="h-4 w-4" /> View Reactions
+              </ContextMenuItem>
+            )}
+            {!isSender && (
+              <ContextMenuItem
+                onClick={() => onMarkUnread(first)}
+                className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+              >
+                <MailOpen className="h-4 w-4" /> Mark as unread
               </ContextMenuItem>
             )}
             {isSender && canDeleteAll && (

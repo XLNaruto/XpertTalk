@@ -31,13 +31,19 @@ interface MessageListProps {
   onEnterSelectionModeMultiple: (msgs: any[]) => void;
   onForward: (msg: any) => void;
   onForwardMultiple: (msgs: any[]) => void;
-  onMediaClick: (path: string, type: "image" | "video", messageId?: string) => void;
+  onMediaClick: (
+    path: string,
+    type: "image" | "video",
+    messageId?: string,
+    mediaId?: string
+  ) => void;
   isSelectionMode: boolean;
   selectedMessages: any[];
   readMessagesApi: (messageId: string, created: string, talkId: string) => void;
   onUnreadCountChange?: (count: number) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
   onTogglePin: (messageId: string) => void;
+  onMarkUnread: (message: any) => void;
 }
 
 // ── Media group detection ──
@@ -64,7 +70,12 @@ function computeMediaGroups(messages: any[]): Map<string, { messages: any[]; isF
       msg.mediaPath &&
       !msg.isDeleted &&
       !msg.replyToMessageId &&
-      !msg.forwardFromMessageId;
+      !msg.forwardFromMessageId &&
+      // A multi-attachment message already renders as its own album grid, and a
+      // captioned one owns a bubble with text — neither may be merged with its
+      // neighbours.
+      !msg.messageText &&
+      (!Array.isArray(msg.mediaItems) || msg.mediaItems.length <= 1);
 
     if (!isMedia) { flush(); continue; }
 
@@ -167,6 +178,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onUnreadCountChange,
   onToggleReaction,
   onTogglePin,
+  onMarkUnread,
 }, ref) {
   const chatuserId = getEncodedCookie("chatuserId") || "";
 
@@ -181,6 +193,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const isMsgApiCall = useMessageCacheStore((s) => s.isMsgApiCall);
   const hasMoreOlder = useMessageCacheStore((s) => s.hasMoreOlder);
   const hasMoreNewer = useMessageCacheStore((s) => s.hasMoreNewer);
+  const unreadMarkToken = useMessageCacheStore((s) => s.unreadMarkToken);
   const firstItemIndex = useMessageCacheStore((s) => s.firstItemIndex);
   const getMessagesList = useMessageCacheStore((s) => s.getMessagesList);
   const dispatchMessage = useMessageCacheStore((s) => s.dispatchMessage);
@@ -209,6 +222,11 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   const suppressFollowRef = useRef(false);
   // Track whether initial unread positioning has been done for this talkId
   const initialPositionDoneRef = useRef(false);
+  // Read-on-view stays OFF for the rest of this visit once the user marks
+  // something unread — otherwise scrolling past the message they just marked
+  // would immediately re-read it and wipe the mark. Re-entering the chat (a
+  // talkId change) or a reload clears this and normal read-on-view resumes.
+  const suppressReadRef = useRef(false);
   // Gate read-marking until Virtuoso has finished initial scroll positioning.
   // Without this, rangeChanged fires for intermediate positions during Virtuoso's
   // alignToBottom → initialTopMostItemIndex settling, marking messages as read prematurely.
@@ -234,6 +252,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     allReadBottomRef.current = false;
     allReadSettleUntilRef.current = Date.now() + 2500;
     readyToMarkRef.current = false;
+    suppressReadRef.current = false;
     if (readyTimerRef.current) clearTimeout(readyTimerRef.current);
   }
 
@@ -280,12 +299,25 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     }
   }
 
-  // Reset local read-tracking state when switching chats
+  // Reset local read-tracking state when switching chats, and whenever a
+  // message is marked unread — those sets remember what was already read and
+  // would otherwise hide the unread label and block re-marking it read.
+  const lastUnreadTokenRef = useRef(unreadMarkToken);
   useEffect(() => {
     setReadMessages(new Set());
     markedAsReadRef.current = new Set();
     setUnreadBelowCount(0);
-  }, [talkId]);
+
+    if (lastUnreadTokenRef.current !== unreadMarkToken) {
+      lastUnreadTokenRef.current = unreadMarkToken;
+      // A mark-unread just landed on the chat we're looking at.
+      suppressReadRef.current = true;
+      // Don't let the unread auto-positioning yank the view to the divider —
+      // the user marked from where they are and stays there.
+      initialPositionDoneRef.current = true;
+      allReadBottomRef.current = false;
+    }
+  }, [talkId, unreadMarkToken]);
 
   // Keep a ref to the latest handleRangeChanged so the settling timer can call it
   const handleRangeChangedRef = useRef<((range: { startIndex: number; endIndex: number }) => void) | null>(null);
@@ -411,7 +443,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       // During initial mount, Virtuoso fires rangeChanged for intermediate
       // positions (alignToBottom → initialTopMostItemIndex) which would
       // prematurely mark messages as read.
-      if (readyToMarkRef.current) {
+      if (readyToMarkRef.current && !suppressReadRef.current) {
         // Find the LAST unread message in the visible range.
         // Server marks everything up to the given messageId as read,
         // so we only need to emit markRead once for the last one.
@@ -503,6 +535,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
     setReadMessages(newRead);
     setUnreadBelowCount(0);
     suppressFollowRef.current = false;
+    // Sending a message is a deliberate "I'm reading this chat" — it ends the
+    // post-mark-unread suppression.
+    suppressReadRef.current = false;
   }, [formattedMessages, readMessages, chatuserId, readMessagesApi, talkId]);
 
 
@@ -685,7 +720,9 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
       if (target) markAsRead(target.messageId, target.created);
 
       // Neutralize the unread auto-positioning so it can't yank the view back
-      // to the unread divider.
+      // to the unread divider. Jumping from a notification is explicit intent,
+      // so it also ends any post-mark-unread read suppression.
+      suppressReadRef.current = false;
       initialPositionDoneRef.current = true;
       allReadBottomRef.current = false;
       suppressFollowRef.current = false;
@@ -848,6 +885,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                   onForwardMultiple={onForwardMultiple}
                   onDeleteAll={onDeleteAll}
                   onToggleReaction={onToggleReaction}
+                  onMarkUnread={onMarkUnread}
                 />
               </div>
             );
@@ -893,6 +931,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                   onEnterSelectionModeMultiple={onEnterSelectionModeMultiple}
                   onToggleReaction={onToggleReaction}
                   onScrollToMessage={scrollToMessage}
+                  onMarkUnread={onMarkUnread}
                 />
               </div>
             );
@@ -934,6 +973,7 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 onScrollToMessage={scrollToMessage}
                 onToggleReaction={onToggleReaction}
                 onTogglePin={onTogglePin}
+                onMarkUnread={onMarkUnread}
               />
             </div>
           );

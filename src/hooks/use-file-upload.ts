@@ -287,50 +287,85 @@ export default function useFileUpload({
 
   // ── Upload ──
 
+  // Upload the whole selection in ONE multipart request (repeated `media`
+  // field) and send ONE message carrying every attachment plus the caption.
+  // Returns true only when the message was actually emitted, so the caller can
+  // keep the composer contents for a retry.
   const uploadFiles = useCallback(
-    async (_talkId: string, replyMessageId?: string | null) => {
-      if (selectedFiles.length === 0) return;
+    async (
+      _talkId: string,
+      replyMessageId?: string | null,
+      caption?: string
+    ): Promise<boolean> => {
+      if (selectedFiles.length === 0) return false;
       setIsUploading(true);
 
       try {
-        const uploadPromises = selectedFiles.map(async (file) => {
-          const param = new FormData();
+        const param = new FormData();
+        selectedFiles.forEach((file) => {
+          // Same field name, repeated — `name`/`type` are index-aligned.
+          param.append("media", file);
           param.append("name", file.name);
           param.append("type", getFileType(file));
-          param.append("media", file);
-
-          try {
-            const response: any = await postData(
-              "chat/media/upload",
-              param,
-              apiHeader(true, 0)
-            );
-
-            if (
-              String(response?.status) === "200" &&
-              String(response?.data.status) === "200"
-            ) {
-              const data = response.data.data;
-              if (isConnectedRef.current) {
-                const messageData: any = {
-                  mediaId: data.mediaId,
-                  messageType: data.type,
-                };
-                if (replyMessageId) {
-                  messageData.replyToMessageId = replyMessageId;
-                }
-                emitRef.current("sendMessage", messageData);
-              }
-            } else {
-              logger.warn("Failed to upload:", file.name);
-            }
-          } catch (error) {
-            logger.error("Error uploading file:", file.name, error);
-          }
         });
 
-        await Promise.all(uploadPromises);
+        const response: any = await postData(
+          "chat/media/upload",
+          param,
+          apiHeader(true, 0)
+        );
+
+        if (
+          String(response?.status) !== "200" ||
+          String(response?.data?.status) !== "200"
+        ) {
+          // Size limits are per file but a single oversized file rejects the
+          // WHOLE batch and stores nothing — the user has to re-pick.
+          logger.warn("Media upload failed:", response?.data?.message);
+          toast.error(
+            response?.data?.message ||
+              "Couldn't upload the attachments. Please try again."
+          );
+          return false;
+        }
+
+        const data = response.data.data || {};
+        const mediaIds: string[] =
+          Array.isArray(data.mediaIds) && data.mediaIds.length > 0
+            ? data.mediaIds
+            : data.mediaId
+              ? [data.mediaId]
+              : [];
+
+        if (mediaIds.length === 0) {
+          toast.error("Couldn't upload the attachments. Please try again.");
+          return false;
+        }
+
+        if (!isConnectedRef.current) {
+          toast.error("You're offline — the attachments weren't sent.");
+          return false;
+        }
+
+        const messageData: any = {
+          // The caption lives in `message`; '' means an uncaptioned album.
+          message: caption?.trim() || "",
+          // Upload order is album order — pass the ids straight through.
+          mediaIds,
+        };
+        if (replyMessageId) {
+          messageData.replyToMessageId = replyMessageId;
+        }
+        // Deliberately no `messageType` — the server derives it from the first
+        // attachment and the value on the `newMessage` broadcast is authoritative.
+        emitRef.current("sendMessage", messageData);
+
         setSelectedFiles([]);
+        return true;
+      } catch (error) {
+        logger.error("Error uploading attachments:", error);
+        toast.error("Couldn't upload the attachments. Please try again.");
+        return false;
       } finally {
         setIsUploading(false);
       }

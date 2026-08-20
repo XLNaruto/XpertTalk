@@ -28,6 +28,10 @@ interface MessageCacheStore {
   isMsgApiCall: boolean;
   hasMoreOlder: boolean;
   hasMoreNewer: boolean;
+  // Bumped on every MARK_UNREAD so the message list can drop the local
+  // "already marked read" tracking that would otherwise suppress the label
+  // and stop the message being re-read later.
+  unreadMarkToken: number;
   // Actions
   switchChat: (talkId: string) => Promise<void>;
   getMessagesList: (
@@ -49,6 +53,7 @@ type MessageAction =
   | { type: 'EDIT_MESSAGE'; payload: { messageId: string; messageText: string } }
   | { type: 'DELETE_MESSAGE'; payload: string }
   | { type: 'UPDATE_READ_STATUS'; payload: { messageId: string } }
+  | { type: 'MARK_UNREAD'; payload: { messageId: string } }
   | { type: 'TOGGLE_REACTION'; payload: { messageId: string; chatuserId: string; userName: string; userProfile?: string; reaction: string } }
   | { type: 'TOGGLE_PIN'; payload: { messageId: string; isPinned: boolean } }
   | { type: 'UPDATE_MEDIA'; payload: { messageId?: string; mediaId?: string; mediaPath: string; mediaName?: string } };
@@ -152,14 +157,41 @@ function applyMessageAction(messages: any[], action: MessageAction): any[] {
     }
     case 'UPDATE_MEDIA': {
       // Backend finished converting an upload (HEIC → PNG) and handed us the
-      // new path. Match on messageId, falling back to mediaId for payloads
-      // that only identify the media record.
+      // new path. The event fires per ATTACHMENT, so patch the matching entry
+      // inside `mediaItems` — overwriting the message's top-level `mediaPath`
+      // would replace the wrong image on an album.
       const { messageId, mediaId, mediaPath, mediaName } = action.payload;
       return messages.map(m => {
-        const hit = messageId ? m.messageId === messageId : !!mediaId && m.mediaId === mediaId;
+        const items: any[] | null = Array.isArray(m.mediaItems) ? m.mediaItems : null;
+        const hitsItem = !!mediaId && !!items?.some((i: any) => i.mediaId === mediaId);
+        const hit =
+          hitsItem ||
+          (messageId ? m.messageId === messageId : !!mediaId && m.mediaId === mediaId);
         if (!hit) return m;
-        return { ...m, mediaPath, ...(mediaName ? { mediaName } : {}) };
+
+        const next: any = { ...m };
+        if (items) {
+          next.mediaItems = items.map((i: any) =>
+            !mediaId || i.mediaId === mediaId
+              ? { ...i, mediaPath, ...(mediaName ? { mediaName } : {}) }
+              : i
+          );
+        }
+        // Keep the legacy top-level pointer in sync only when it IS the item
+        // that changed, so a pre-album read path never shows another album item.
+        if (!mediaId || !m.mediaId || m.mediaId === mediaId) {
+          next.mediaPath = mediaPath;
+          if (mediaName) next.mediaName = mediaName;
+        }
+        return next;
       });
+    }
+    case 'MARK_UNREAD': {
+      // "Mark as unread from here" — the caller's `lastReadAt` was rewound, so
+      // the target and everything newer becomes unread again for this user.
+      const idx = messages.findIndex(m => m.messageId === action.payload.messageId);
+      if (idx < 0) return messages;
+      return messages.map((m, i) => (i >= idx ? { ...m, unread: 1 } : m));
     }
     case 'TOGGLE_PIN': {
       const { messageId, isPinned } = action.payload;
@@ -255,6 +287,7 @@ export const useMessageCacheStore = create<MessageCacheStore>((set, get) => ({
   isMsgApiCall: false,
   hasMoreOlder: true,
   hasMoreNewer: true,
+  unreadMarkToken: 0,
   switchChat: async (talkId: string) => {
     if (!talkId) return;
 
@@ -520,10 +553,14 @@ export const useMessageCacheStore = create<MessageCacheStore>((set, get) => ({
     const trimmed = newMsgs.slice(-MAX_CACHED_MESSAGES);
     const dmWasTrimmed = newMsgs.length > MAX_CACHED_MESSAGES;
 
-    set({
+    set((state) => ({
       messages: newMsgs,
       formattedMessages: formatMessagesWithDates(newMsgs),
       firstItemIndex: newFII,
+      unreadMarkToken:
+        action.type === 'MARK_UNREAD'
+          ? state.unreadMarkToken + 1
+          : state.unreadMarkToken,
       cache: {
         ...cache,
         [activeTalkId]: {
@@ -539,7 +576,7 @@ export const useMessageCacheStore = create<MessageCacheStore>((set, get) => ({
           lastMessageTime: newMsgs[newMsgs.length - 1]?.created || '',
         },
       },
-    });
+    }));
   },
 
   clearChat: (talkId) => {

@@ -106,7 +106,7 @@ interface MediaListSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   talkId: string;
-  onMediaClick: (mediaPath: string, mediaType: "image" | "video", allItems: { mediaPath: string; mediaType: string; name?: string; senderChatuserId?: string; messageId?: string }[], messageId?: string) => void;
+  onMediaClick: (mediaPath: string, mediaType: "image" | "video", allItems: { mediaPath: string; mediaType: string; name?: string; senderChatuserId?: string; messageId?: string; mediaId?: string }[], messageId?: string, mediaId?: string) => void;
 }
 
 export function MediaListSheet({
@@ -176,7 +176,9 @@ export function MediaListSheet({
           // Same order the grid renders in, so lightbox next/prev follows
           // what the user sees instead of running backwards.
           [...mediaItems].reverse(),
-          item.messageId
+          item.messageId,
+          // Album rows share a messageId — mediaId picks the clicked attachment.
+          item.mediaId
         );
       }, 300);
     }

@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, Download, Forward, Image, Pin, Search, Trash2, X } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Bell, BellOff, ChevronDown, ChevronUp, Download, Forward, Image, Pin, Search, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { cn } from "@/lib/utils";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
+import { MuteDialog } from "@/components/chat/mute-dialog";
 
 interface ChatHeaderProps {
   receiverName: string;
@@ -36,6 +37,14 @@ interface ChatHeaderProps {
   onSearchPrev: () => void;
   onPinnedClick: () => void;
   onMediaListClick: () => void;
+  /** Live mute state of this talk (a lapsed `muteUntil` counts as unmuted). */
+  isMuted?: boolean;
+  muteLabel?: string;
+  /**
+   * Mute/unmute this talk — only provided when the build may mute (admin).
+   * `muteUntil` is null for an indefinite mute and for unmuting.
+   */
+  onToggleMute?: (isMuted: boolean, muteUntil: string | null) => void;
 }
 
 const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -67,8 +76,12 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
   onSearchPrev,
   onPinnedClick,
   onMediaListClick,
+  isMuted,
+  muteLabel,
+  onToggleMute,
 }) => {
   const { canInstall, install } = usePwaInstall();
+  const [muteDialogOpen, setMuteDialogOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const isPrivate = talkType === "PRIVATE";
   const isGroup = talkType === "GROUP";
@@ -135,8 +148,13 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
               // online={isPrivate ? isActive : undefined}
             />
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-foreground">
-                {displayName}
+              <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-foreground">
+                <span className="truncate">{displayName}</span>
+                {isMuted && (
+                  <span title={muteLabel || "Muted"} className="shrink-0">
+                    <BellOff className="h-3.5 w-3.5 text-muted-foreground/60" />
+                  </span>
+                )}
               </p>
               {isPrivate && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -191,6 +209,23 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
               >
                 <Pin className="h-4 w-4" />
               </Button>
+              {onToggleMute && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title={isMuted ? muteLabel || "Muted" : "Mute notifications"}
+                  className="rounded-lg hover:bg-primary/10 hover:text-primary"
+                  onClick={() =>
+                    isMuted ? onToggleMute(false, null) : setMuteDialogOpen(true)
+                  }
+                >
+                  {isMuted ? (
+                    <BellOff className="h-4 w-4" />
+                  ) : (
+                    <Bell className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
             </>
           )}
           {canInstall && (
@@ -298,6 +333,15 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
             <X className="h-4 w-4 text-muted-foreground hover:text-destructive" />
           </button>
         </div>
+      )}
+
+      {onToggleMute && (
+        <MuteDialog
+          open={muteDialogOpen}
+          onOpenChange={setMuteDialogOpen}
+          name={displayName}
+          onConfirm={(muteUntil) => onToggleMute(true, muteUntil)}
+        />
       )}
     </div>
   );

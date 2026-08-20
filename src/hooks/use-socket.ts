@@ -138,15 +138,20 @@ export function useTalkSocket({
     };
   }, [baseUrl, talkId, token]);
 
+  // Returns whether the event actually went out. Callers must use this rather
+  // than the `isConnected` state to decide "am I online?": handlers get frozen
+  // inside memoised children (MessageBubble compares only message fields), so a
+  // captured `isConnected` can be stale forever, while this reads the live socket.
   const emit = useCallback(
-    (event: string, data?: any, ack?: (response: any) => void) => {
-      if (socketRef.current?.connected) {
-        if (ack) {
-          socketRef.current.emit(event, data, ack);
-        } else {
-          socketRef.current.emit(event, data);
-        }
+    (event: string, data?: any, ack?: (response: any) => void): boolean => {
+      const socket = socketRef.current;
+      if (!socket?.connected) return false;
+      if (ack) {
+        socket.emit(event, data, ack);
+      } else {
+        socket.emit(event, data);
       }
+      return true;
     },
     []
   );
@@ -161,6 +166,9 @@ interface UseContactSocketOptions {
   token: string | null;
   onTalkUpdated?: (data: any) => void;
   onPresenceChanged?: (data: any) => void;
+  // Multi-device sync for "mark as unread" — emitted only to this user's own
+  // room, never to other participants. A `talkUpdated` follows it.
+  onMessageMarkedUnread?: (data: any) => void;
 }
 
 export function useContactSocket({
@@ -168,6 +176,7 @@ export function useContactSocket({
   token,
   onTalkUpdated,
   onPresenceChanged,
+  onMessageMarkedUnread,
 }: UseContactSocketOptions) {
   const socketRef = useRef<Socket | null>(null);
 
@@ -175,6 +184,8 @@ export function useContactSocket({
   onTalkUpdatedRef.current = onTalkUpdated;
   const onPresenceChangedRef = useRef(onPresenceChanged);
   onPresenceChangedRef.current = onPresenceChanged;
+  const onMessageMarkedUnreadRef = useRef(onMessageMarkedUnread);
+  onMessageMarkedUnreadRef.current = onMessageMarkedUnread;
 
   useEffect(() => {
     if (!baseUrl || !token) return;
@@ -205,6 +216,9 @@ export function useContactSocket({
 
     socket.on("talkUpdated", (data) => onTalkUpdatedRef.current?.(data));
     socket.on("presenceChanged", (data) => onPresenceChangedRef.current?.(data));
+    socket.on("messageMarkedUnread", (data) =>
+      onMessageMarkedUnreadRef.current?.(data)
+    );
 
     const pingInterval = setInterval(() => {
       if (socket.connected) socket.emit("ping", {});

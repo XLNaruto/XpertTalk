@@ -87,6 +87,36 @@
   * {
     @apply border-border;
   }
+  /* Every interactive element gets a pointer cursor */
+  button,
+  summary,
+  a[href],
+  label[for],
+  [role="button"],
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="option"],
+  [role="tab"],
+  [role="switch"],
+  [role="checkbox"],
+  [role="radio"],
+  [role="combobox"],
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="file"],
+  input[type="submit"],
+  input[type="reset"],
+  select {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  [aria-disabled="true"],
+  [data-disabled] {
+    cursor: not-allowed;
+  }
   body {
     @apply bg-background text-foreground;
     margin: 0;
@@ -175,6 +205,48 @@
     6px 6px 14px var(--bubble-sent-shadow),
     -3px -3px 10px var(--bubble-sent-dark-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* ══════════════════════════════════════════════════════════
+   LINKS INSIDE MESSAGE TEXT
+   ══════════════════════════════════════════════════════════ */
+/* A sent bubble is a saturated gradient with white text; a received one is a
+   light surface with dark text. So a link must inherit the bubble's colour —
+   any fixed colour is unreadable on one of the two (dark-on-blue in light
+   mode). The underline carries the "this is a link" signal instead. */
+.msg-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  /* URLs have no spaces to wrap at — break them rather than overflow. */
+  word-break: break-all;
+}
+.msg-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ══════════════════════════════════════════════════════════
+   LINK PREVIEW CARD (inside a message bubble)
+   ══════════════════════════════════════════════════════════ */
+/* Tinted from the bubble's OWN text colour, so the card reads correctly on any
+   bubble fill — the sent gradient, the received surface, a custom accent, or
+   the composer background — without knowing which one it sits on. */
+.msg-card {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-left: 3px solid color-mix(in srgb, currentColor 45%, transparent);
+  transition: background-color 0.15s ease;
+}
+.msg-card:hover {
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+/* Chip form used when a URL could not be unfurled — no accent bar. */
+.msg-chip {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  transition: background-color 0.15s ease;
+}
+.msg-chip:hover {
+  background: color-mix(in srgb, currentColor 15%, transparent);
 }
 
 /* ══════════════════════════════════════════════════════════

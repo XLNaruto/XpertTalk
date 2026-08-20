@@ -16,6 +16,7 @@ import {
   Pin,
   PinOff,
   Ban,
+  MailOpen,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -46,6 +47,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { QuickReactionsBar } from "@/components/chat/quick-reactions-bar";
 import { MessageReactions } from "@/components/chat/message-reactions";
 import { ReactionDetailsDialog } from "@/components/modals/reaction-details-dialog";
+import MediaAlbum from "@/components/chat/media-album";
+import LinkPreviewCard from "@/components/chat/link-preview-card";
+import useLinkPreview from "@/hooks/use-link-preview";
+import {
+  getMediaCount,
+  getMediaItems,
+  getMessageText,
+  itemKind,
+  previewLabel,
+  type MediaItem,
+} from "@/lib/media-items";
+import { downloadMedia, downloadMediaItems } from "@/lib/download-media";
 import logger from "@/lib/logger";
 
 // ── Sender name color palette (vibrant, gamified) ──
@@ -93,10 +106,16 @@ interface MessageBubbleProps {
   onSelect: (message: any) => void;
   onEnterSelectionMode: (message: any) => void;
   onForward: (message: any) => void;
-  onMediaClick: (mediaPath: string, mediaType: "image" | "video", messageId?: string) => void;
+  onMediaClick: (
+    mediaPath: string,
+    mediaType: "image" | "video",
+    messageId?: string,
+    mediaId?: string
+  ) => void;
   onScrollToMessage?: (messageId: string) => void;
   onToggleReaction: (messageId: string, reaction: string) => void;
   onTogglePin: (messageId: string) => void;
+  onMarkUnread: (message: any) => void;
 }
 
 // ── Time overlay for standalone media ──
@@ -234,9 +253,11 @@ function ReplyPreview({
 
   const isMediaReply =
     replyMsg.messageType === "IMAGE" || replyMsg.messageType === "VIDEO";
-  const formattedReplyText = formatPreview(
-    replyText || replyMsg.messageText || ""
-  );
+  // Caption first, then a media description. A quoted image can now carry text,
+  // and `messageType` says nothing about whether it does.
+  const replyLabel = replyText || previewLabel(replyMsg);
+  const formattedReplyText = formatPreview(replyLabel);
+  const replyMediaCount = getMediaCount(replyMsg);
 
   return (
     <div
@@ -268,17 +289,11 @@ function ReplyPreview({
             isSender ? "text-white/70" : "text-muted-foreground"
           )}
         >
-          {replyMsg.messageType === "TEXT" ? (
-            <span dangerouslySetInnerHTML={{ __html: formattedReplyText }} />
-          ) : replyMsg.messageType === "IMAGE"
-              ? "Photo"
-              : replyMsg.messageType === "VIDEO"
-                ? "Video"
-                : replyMsg.mediaName || "Document"}
+          <span dangerouslySetInnerHTML={{ __html: formattedReplyText }} />
         </p>
       </div>
       {isMediaReply && replyMsg.mediaPath && (
-        <div className="h-[34px] w-[34px] shrink-0 overflow-hidden rounded-lg">
+        <div className="relative h-[34px] w-[34px] shrink-0 overflow-hidden rounded-lg">
           {isConvertingMedia(replyMsg.mediaPath) ? (
             <Skeleton className="h-full w-full rounded-lg" />
           ) : replyMsg.messageType === "IMAGE" ? (
@@ -297,6 +312,12 @@ function ReplyPreview({
               preload="metadata"
               className="h-full w-full object-cover"
             />
+          )}
+          {/* The preview carries only the first attachment — badge the rest. */}
+          {replyMediaCount > 1 && (
+            <span className="absolute bottom-0 right-0 rounded-tl-md bg-black/60 px-1 text-[9px] font-bold leading-[13px] text-white">
+              +{replyMediaCount - 1}
+            </span>
           )}
         </div>
       )}
@@ -322,6 +343,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onScrollToMessage,
   onToggleReaction,
   onTogglePin,
+  onMarkUnread,
 }) => {
   const [imgError, setImgError] = useState(false);
   // Orientation of the standalone image, measured on load. Landscape images
@@ -334,53 +356,49 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [reactionBarOpen, setReactionBarOpen] = useState(false);
   const chatuserId = getEncodedCookie("chatuserId") || "";
 
-  const hasMedia =
-    message.messageType !== "TEXT" ||
-    (message?.forwardMessage &&
-      message?.forwardMessage?.messageType !== "TEXT");
+  // Every message renders from its ordered attachment list — a single
+  // attachment is just a one-item album, so there is no separate code path.
+  const mediaItems = getMediaItems(message);
+  const hasMedia = mediaItems.length > 0;
+  const isAlbum = mediaItems.length > 1;
+  const firstItem = mediaItems[0];
 
-  const effectiveType = message.forwardFromMessageId
-    ? message?.forwardMessage?.messageType || "TEXT"
-    : message.messageType;
+  // The message's text. On a media message this is the CAPTION — never gate it
+  // on `messageType`, which only describes how to render the bubble.
+  const bodyText = getMessageText(message);
+  const hasText = !!bodyText;
 
+  // Unfurl the first link in the text. Skipped for attachments — an album grid
+  // and a link card would fight for the same bubble — and for tombstones.
+  const linkPreview = useLinkPreview(
+    bodyText,
+    hasText && !hasMedia && !message.isDeleted
+  );
+
+  // Edge-to-edge image bubble: only for a lone, uncaptioned, non-reply image.
   const isStandaloneImage =
-    effectiveType === "IMAGE" && !message.replyToMessageId && !imgError;
+    !isAlbum &&
+    !hasText &&
+    firstItem?.mediaType === "IMAGE" &&
+    !message.replyToMessageId &&
+    !imgError;
 
-  const handleDownload = async () => {
-    const url = message.forwardFromMessageId
-      ? message?.forwardMessage?.mediaPath
-      : message.mediaPath;
-    const fileName = message.forwardFromMessageId
-      ? message?.forwardMessage?.mediaName
-      : message.mediaName || "document";
-    try {
-      const response = await fetch(url);
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(blobUrl);
-    } catch {
-      window.open(url, "_blank");
+  const handleDownload = () => {
+    if (isAlbum) {
+      // Forwarding clones the whole album, so download every attachment.
+      downloadMediaItems(mediaItems);
+      return;
     }
+    downloadMedia(firstItem?.mediaPath, firstItem?.mediaName || "document");
   };
 
   const handleCopy = () => {
-    const text = message.forwardFromMessageId
-      ? message.forwardedMessageText
-      : message.messageText;
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(bodyText);
     toast.success("Copied to clipboard");
   };
 
   const handleCopyImage = async () => {
-    const url = message.forwardFromMessageId
-      ? message?.forwardMessage?.mediaPath
-      : message.mediaPath;
+    const url = firstItem?.mediaPath;
     if (!url) return;
     try {
       await copyImageToClipboard(url);
@@ -421,30 +439,34 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           <SquareCheck className="h-4 w-4" /> Select
         </ContextMenuItem>
       )}
-      {message.messageType === "TEXT" && (
-        <>
-          <ContextMenuItem
-            onClick={handleCopy}
-            className="gap-2 rounded-lg px-2.5 py-2 text-sm"
-          >
-            <Copy className="h-4 w-4" /> Copy
-          </ContextMenuItem>
-          {isSender && !message.forwardFromMessageId && isWithin24Hours && (
-            <ContextMenuItem
-              onClick={() => onEdit(message)}
-              className="gap-2 rounded-lg px-2.5 py-2 text-sm"
-            >
-              <Pencil className="h-4 w-4" /> Edit
-            </ContextMenuItem>
-          )}
-        </>
+      {/* Copy text — driven by whether there IS text, not by messageType, so a
+          captioned image offers it too. */}
+      {hasText && (
+        <ContextMenuItem
+          onClick={handleCopy}
+          className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+        >
+          <Copy className="h-4 w-4" /> Copy text
+        </ContextMenuItem>
       )}
-      {effectiveType === "IMAGE" && (
+      {/* Edit — the caption lives in the same `messageText` a text message uses,
+          so editing works on a media message too, including adding a caption
+          where there wasn't one. */}
+      {isSender && !message.forwardFromMessageId && isWithin24Hours && (
+        <ContextMenuItem
+          onClick={() => onEdit(message)}
+          className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+        >
+          <Pencil className="h-4 w-4" />{" "}
+          {hasMedia ? (hasText ? "Edit caption" : "Add caption") : "Edit"}
+        </ContextMenuItem>
+      )}
+      {!isAlbum && firstItem?.mediaType === "IMAGE" && (
         <ContextMenuItem
           onClick={handleCopyImage}
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
         >
-          <Copy className="h-4 w-4" /> Copy
+          <Copy className="h-4 w-4" /> Copy image
         </ContextMenuItem>
       )}
       {hasMedia && (
@@ -452,7 +474,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           onClick={handleDownload}
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
         >
-          <Download className="h-4 w-4" /> Download
+          <Download className="h-4 w-4" />{" "}
+          {isAlbum ? `Download all (${mediaItems.length})` : "Download"}
         </ContextMenuItem>
       )}
       {message.reactions?.length > 0 && (
@@ -461,6 +484,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
         >
           <SmilePlus className="h-4 w-4" /> View Reactions
+        </ContextMenuItem>
+      )}
+      {!isSender && (
+        <ContextMenuItem
+          onClick={() => onMarkUnread(message)}
+          className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+        >
+          <MailOpen className="h-4 w-4" /> Mark as unread
         </ContextMenuItem>
       )}
       <ContextMenuItem
@@ -504,7 +535,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             : // Portrait / square: fixed square box with color fill
               "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
         )}
-        onClick={() => onMediaClick(path, "image", message.messageId)}
+        onClick={() =>
+          onMediaClick(path, "image", message.messageId, firstItem?.mediaId)
+        }
         // Fetch + PNG-encode in the background on hover, so a later "Copy image"
         // is a pure clipboard write (~ms) instead of a 3-4s download+encode.
         onMouseEnter={() => prewarmImage(path)}
@@ -542,7 +575,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             : // Portrait / square: fixed square box with color fill
               "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
         )}
-        onClick={() => onMediaClick(path, "video", message.messageId)}
+        onClick={() =>
+          onMediaClick(path, "video", message.messageId, firstItem?.mediaId)
+        }
       >
         <video
           src={path}
@@ -570,8 +605,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   function renderDocument(name?: string) {
     return (
       <div
+        onClick={(e) => {
+          if (isSelectionMode) return;
+          e.stopPropagation();
+          handleDownload();
+        }}
         className={cn(
-          "flex max-w-70 items-center gap-3 rounded-xl px-3 py-2.5",
+          "flex max-w-70 cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5",
           isSender
             ? "bg-white/15"
             : "bg-primary/5 dark:bg-primary/10"
@@ -590,14 +630,150 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     );
   }
 
-  // ── Media props ──
+  // ── Media props (first attachment — the album is rendered from mediaItems) ──
 
-  const mediaPath = message.forwardFromMessageId
-    ? message?.forwardMessage?.mediaPath
-    : message.mediaPath;
-  const mediaName = message.forwardFromMessageId
-    ? message?.forwardMessage?.mediaName
-    : message.mediaName;
+  const mediaPath = firstItem?.mediaPath;
+  const mediaName = firstItem?.mediaName;
+
+  /** Open one album item in the lightbox, or download it when it isn't viewable. */
+  const openAlbumItem = (item: MediaItem) =>
+    onMediaClick(item.mediaPath, itemKind(item), message.messageId, item.mediaId);
+  const downloadAlbumItem = (item: MediaItem) =>
+    downloadMedia(item.mediaPath, item.mediaName);
+
+  /** The caption block — also carries the timestamp when text is present. */
+  function renderTextBlock(text: string) {
+    return (
+      <div className="pb-1">
+        <div className="px-3.5 pt-[9px]">
+          <div
+            className="text-[14px] leading-[1.55] wrap-break-word"
+            style={{
+              whiteSpace: "pre-wrap",
+              overflowWrap: "break-word",
+              wordBreak: "break-word",
+            }}
+            dangerouslySetInnerHTML={{ __html: formatMessage(text) }}
+          />
+          {/* With a card below, the timestamp moves under it — otherwise it
+              would sit between the link and its own preview. */}
+          {!linkPreview && (
+            <BubbleTimestamp
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+              isEdited={isEdited}
+            />
+          )}
+        </div>
+
+        {linkPreview && (
+          <>
+            <div className="px-3.5 pt-[6px]">
+              <LinkPreviewCard preview={linkPreview} bare horizontal />
+            </div>
+            <div className="px-3.5">
+              <BubbleTimestamp
+                time={message.created}
+                isSender={isSender}
+                isReadByAll={message.isReadByAll}
+                isEdited={isEdited}
+              />
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  /**
+   * The media half of a bubble. An album renders as a tiled grid; a lone
+   * attachment renders per ITS type. The timestamp only sits on the media when
+   * there is no caption to carry it.
+   */
+  function renderMediaSection() {
+    if (!hasMedia) return null;
+
+    if (isAlbum) {
+      return (
+        <div className="relative m-[5px] overflow-hidden rounded-xl">
+          <MediaAlbum
+            items={mediaItems}
+            onItemClick={openAlbumItem}
+            onDocumentClick={downloadAlbumItem}
+            isSelectionMode={isSelectionMode}
+          />
+          {!hasText && (
+            <TimeOverlay
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+            />
+          )}
+        </div>
+      );
+    }
+
+    const type = firstItem?.mediaType;
+
+    if (type === "DOCUMENT" || type === "AUDIO") {
+      return (
+        <div className="px-3.5 pt-[9px] pb-1">
+          {renderDocument(mediaName)}
+          {!hasText && (
+            <BubbleTimestamp
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+              isEdited={isEdited}
+            />
+          )}
+        </div>
+      );
+    }
+
+    if (type === "VIDEO") {
+      return (
+        <div className="relative m-[5px]">
+          {renderVideo(mediaPath)}
+          {!hasText && (
+            <TimeOverlay
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+            />
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div className="relative m-[5px] overflow-hidden rounded-xl">
+          {renderImage(mediaPath)}
+          {!hasText && !imgError && (
+            <TimeOverlay
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+            />
+          )}
+        </div>
+        {/* A broken image shows a fallback tile — the overlay would be unreadable
+            on it, so the timestamp moves below instead of disappearing. */}
+        {!hasText && imgError && (
+          <div className="px-3.5 pb-1">
+            <BubbleTimestamp
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+              isEdited={isEdited}
+            />
+          </div>
+        )}
+      </>
+    );
+  }
 
   // ── Bubble content ──
 
@@ -670,7 +846,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           className={cn(
             "relative overflow-hidden rounded-2xl [.dark_&]:shadow-none!",
             isSender ? "rounded-tr-[4px]" : "rounded-tl-[4px]",
-            isSelected && "ring-2 ring-primary/40"
+            isSelected && "ring-2 ring-primary/40",
+            isSelectionMode && "cursor-pointer"
           )}
           style={isSender ? { boxShadow: '0 2px 12px color-mix(in srgb, var(--color-primary) 20%, transparent)' } : { boxShadow: '0 2px 10px rgba(0,0,0,0.15)' }}
           onClick={isSelectionMode ? () => onSelect(message) : undefined}
@@ -694,7 +871,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             isSender
               ? "rounded-tr-[4px] bubble-sent"
               : "rounded-tl-[4px] bubble-recv",
-            isSelected && "ring-2 ring-primary/40"
+            isSelected && "ring-2 ring-primary/40",
+            isSelectionMode && "cursor-pointer"
           )}
           onClick={isSelectionMode ? () => onSelect(message) : undefined}
         >
@@ -713,18 +891,19 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
     // Emoji-only message — no bubble background, large emoji
     const emojiOnly =
-      message.messageType === "TEXT" &&
+      !hasMedia &&
+      hasText &&
       !message.forwardFromMessageId &&
       !message.replyToMessageId &&
-      isEmojiOnly(message.messageText);
+      isEmojiOnly(bodyText);
 
     if (emojiOnly) {
       return (
         <div
-          className={cn(isSelected && "ring-2 ring-primary/40 rounded-2xl")}
+          className={cn(isSelected && "ring-2 ring-primary/40 rounded-2xl", isSelectionMode && "cursor-pointer")}
           onClick={isSelectionMode ? () => onSelect(message) : undefined}
         >
-          <span className="text-[2.5rem] leading-none">{message.messageText}</span>
+          <span className="text-[2.5rem] leading-none">{bodyText}</span>
           <div className="flex items-center justify-end gap-1 mt-0.5">
             <BubbleTimestamp time={message.created} isSender={isSender} isReadByAll={message.isReadByAll} isEdited={isEdited} noBubble />
           </div>
@@ -732,7 +911,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       );
     }
 
-    // Glass bubble for everything else
+    // Glass bubble for everything else. Media and text are independent halves:
+    // a media message can carry a caption, so both are rendered when present.
     return (
       <div
         className={cn(
@@ -740,99 +920,31 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           isSender
             ? "rounded-tr-[4px] bubble-sent"
             : "rounded-tl-[4px] bubble-recv",
-          isSelected && "ring-2 ring-primary/40"
+          isSelected && "ring-2 ring-primary/40",
+          isSelectionMode && "cursor-pointer"
         )}
         onClick={isSelectionMode ? () => onSelect(message) : undefined}
       >
         {replyPreview}
 
-        {message.forwardFromMessageId ? (
-          <>
-            <div className="px-3.5 pb-0 pt-[9px]">{forwardedLabel}</div>
-            {effectiveType === "TEXT" ? (
-              <div className="px-3.5 pt-[9px] pb-1">
-                <div
-                  className="text-[14px] leading-[1.55] wrap-break-word"
-                  style={{ whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word" }}
-                  dangerouslySetInnerHTML={{
-                    __html: formatMessage(message.forwardedMessageText),
-                  }}
-                />
-                <BubbleTimestamp time={message.created} isSender={isSender} isReadByAll={message.isReadByAll} isEdited={isEdited} />
-              </div>
-            ) : effectiveType === "VIDEO" && mediaPath ? (
-              <div className="relative m-[5px]">
-                {renderVideo(mediaPath)}
-                <TimeOverlay
-                  time={message.created}
-                  isSender={isSender}
-                  isReadByAll={message.isReadByAll}
-                />
-              </div>
-            ) : effectiveType === "DOCUMENT" ? (
-              <div className="px-3.5 pt-[9px] pb-1">
-                {renderDocument(mediaName)}
-                <BubbleTimestamp time={message.created} isSender={isSender} isReadByAll={message.isReadByAll} isEdited={isEdited} />
-              </div>
-            ) : mediaPath ? (
-              <div className="relative m-[5px] overflow-hidden rounded-xl">
-                {renderImage(mediaPath)}
-                <TimeOverlay
-                  time={message.created}
-                  isSender={isSender}
-                  isReadByAll={message.isReadByAll}
-                />
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <>
-            {message.messageType === "TEXT" && (
-              <div className="px-3.5 pt-[9px] pb-1">
-                <div
-                  className="text-[14px] leading-[1.55] wrap-break-word"
-                  style={{ whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word" }}
-                  dangerouslySetInnerHTML={{
-                    __html: formatMessage(message.messageText),
-                  }}
-                />
-                <BubbleTimestamp time={message.created} isSender={isSender} isReadByAll={message.isReadByAll} isEdited={isEdited} />
-              </div>
-            )}
+        {message.forwardFromMessageId && (
+          <div className="px-3.5 pb-0 pt-[9px]">{forwardedLabel}</div>
+        )}
 
-            {message.messageType === "VIDEO" && mediaPath && (
-              <div className="relative m-[5px]">
-                {renderVideo(mediaPath)}
-                <TimeOverlay
-                  time={message.created}
-                  isSender={isSender}
-                  isReadByAll={message.isReadByAll}
-                />
-              </div>
-            )}
+        {renderMediaSection()}
 
-            {message.messageType === "IMAGE" &&
-              (message.replyToMessageId || imgError) &&
-              mediaPath && (
-                <div className="relative m-[5px] overflow-hidden rounded-xl">
-                  {renderImage(mediaPath)}
-                  {!imgError && (
-                    <TimeOverlay
-                      time={message.created}
-                      isSender={isSender}
-                      isReadByAll={message.isReadByAll}
-                    />
-                  )}
-                </div>
-              )}
+        {hasText && renderTextBlock(bodyText)}
 
-            {message.messageType === "DOCUMENT" && (
-              <div className="px-3.5 pt-[9px] pb-1">
-                {renderDocument(mediaName)}
-                <BubbleTimestamp time={message.created} isSender={isSender} isReadByAll={message.isReadByAll} isEdited={isEdited} />
-              </div>
-            )}
-          </>
+        {/* Nothing to show but a timestamp (shouldn't happen — defensive). */}
+        {!hasText && !hasMedia && (
+          <div className="px-3.5 pt-[9px] pb-1">
+            <BubbleTimestamp
+              time={message.created}
+              isSender={isSender}
+              isReadByAll={message.isReadByAll}
+              isEdited={isEdited}
+            />
+          </div>
         )}
       </div>
     );
@@ -984,6 +1096,10 @@ function areEqual(
     prev.message.isReadByAll === next.message.isReadByAll &&
     prev.message.mediaPath === next.message.mediaPath &&
     prev.message.mediaName === next.message.mediaName &&
+    // Album items are patched in place by `mediaConverted`, so compare the
+    // array identity too or a converted attachment never repaints.
+    prev.message.mediaItems === next.message.mediaItems &&
+    prev.message.unread === next.message.unread &&
     prev.isSender === next.isSender &&
     prev.isSelected === next.isSelected &&
     prev.isSelectionMode === next.isSelectionMode &&

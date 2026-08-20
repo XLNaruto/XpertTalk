@@ -23,12 +23,14 @@ import { useAuth } from "@/providers/auth-provider";
 import { useChatStore } from "@/stores/chat-store";
 import { useUserListStore } from "@/stores/user-list-store";
 import { useUIStore } from "@/stores/ui-store";
+import { useMessageCacheStore } from "@/stores/message-cache-store";
 import { useContactSocket } from "@/hooks/use-socket";
 import { apiHeader, getData, postData } from "@/lib/api-helper";
 import { decrypt, encryptUrlData, getEncodedCookie } from "@/lib/encryption";
 import { clearCookies } from "@/lib/cookie";
 import logger from "@/lib/logger";
 import { getAllDraftsFromDB } from "@/db/indexed-db";
+import { canMuteTalks, muteStatusLabel } from "@/lib/mute";
 
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
@@ -69,6 +71,8 @@ function ChatSection({
   onSelect,
   onPin,
   onDelete,
+  onMarkUnread,
+  onMute,
 }: {
   title: string;
   items: any[];
@@ -79,6 +83,8 @@ function ChatSection({
   onSelect: (data: any) => void;
   onPin: (talkId: string, isPinned: boolean) => void;
   onDelete: (talkId: string) => void;
+  onMarkUnread: (talkId: string, messageId: string) => void;
+  onMute?: (talkId: string, isMuted: boolean, muteUntil: string | null) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
 
@@ -165,6 +171,8 @@ function ChatSection({
                 onSelect={onSelect}
                 onPin={onPin}
                 onDelete={canDelete ? onDelete : undefined}
+                onMarkUnread={onMarkUnread}
+                onMute={onMute}
               />
             );
           })}
@@ -270,6 +278,7 @@ export function ChatSidebar() {
   const setUserList = useUserListStore((s) => s.setUserList);
   const getUserList = useUserListStore((s) => s.getUserList);
   const applyPresence = useUserListStore((s) => s.applyPresence);
+  const toggleMute = useUserListStore((s) => s.toggleMute);
   const isUserListLoading = useUserListStore((s) => s.isLoading);
 
   const closeSearchOnMsg = useUIStore((s) => s.closeSearchOnMsg);
@@ -309,6 +318,26 @@ export function ChatSidebar() {
     onTalkUpdated: (newMessage: any) => {
       updateUserList(newMessage);
     },
+    // Another device of THIS user marked a message unread. Nobody else gets
+    // this event; a `talkUpdated` with the refreshed count follows it.
+    onMessageMarkedUnread: (data: any) => {
+      const { talkId, messageId, unreadCount } = data || {};
+      if (!talkId) return;
+      if (typeof unreadCount === "number") {
+        setUserList((prev: any[]) =>
+          prev.map((u: any) => (u.talkId === talkId ? { ...u, unreadCount } : u))
+        );
+      }
+      // If it's the chat currently open here, flip the messages locally too.
+      if (
+        messageId &&
+        talkId === useMessageCacheStore.getState().activeTalkId
+      ) {
+        useMessageCacheStore
+          .getState()
+          .dispatchMessage({ type: "MARK_UNREAD", payload: { messageId } });
+      }
+    },
   });
 
   // Always read the currently-open chat so socket updates use the latest value
@@ -324,9 +353,19 @@ export function ChatSidebar() {
         // count (it ticks it down as the viewport marks messages read). Don't let
         // the server's talkUpdated value clobber that — preserve the local count.
         const prevEntry = prev.find((u) => u.talkId === talkId);
+        // Mute state isn't part of a message update — keep whatever the row
+        // already had unless the payload actually carries it, so a mute isn't
+        // silently dropped by the next incoming message.
+        const muteFields =
+          "isMuted" in (newMessage || {})
+            ? {}
+            : {
+                isMuted: prevEntry?.isMuted ?? false,
+                muteUntil: prevEntry?.muteUntil ?? null,
+              };
         const entry = isActiveChat
-          ? { ...newMessage, unreadCount: prevEntry?.unreadCount ?? 0 }
-          : newMessage;
+          ? { ...newMessage, ...muteFields, unreadCount: prevEntry?.unreadCount ?? 0 }
+          : { ...newMessage, ...muteFields };
         const newSendAt = newMessage?.lastMessage?.sendAt
           ? new Date(newMessage.lastMessage.sendAt).getTime()
           : newMessage?.created
@@ -585,6 +624,70 @@ export function ChatSidebar() {
     [],
   );
 
+  // ── Mark a chat unread from the list ──
+  // Rewinds this user's `lastReadAt` to the chat's last message, so it counts as
+  // unread again. REST form because the /talk socket isn't open from the list.
+  const handleMarkUnread = useCallback(
+    async (talkId: string, messageId: string) => {
+      if (!talkId || !messageId) return;
+      try {
+        const response: any = await postData(
+          "chat/message/unread",
+          { talkId, messageId },
+          apiHeader(false, 0),
+        );
+        if (
+          String(response?.status) === "200" &&
+          String(response?.data?.status) === "200"
+        ) {
+          const count = response.data?.data?.unreadCount;
+          setUserList((prev: any[]) =>
+            prev.map((u: any) =>
+              u.talkId === talkId
+                ? { ...u, unreadCount: typeof count === "number" ? count : 1 }
+                : u,
+            ),
+          );
+          if (talkId === useMessageCacheStore.getState().activeTalkId) {
+            useMessageCacheStore
+              .getState()
+              .dispatchMessage({ type: "MARK_UNREAD", payload: { messageId } });
+          }
+        } else {
+          toast.error(
+            response?.data?.message || "Couldn't mark the chat as unread",
+          );
+        }
+      } catch (error) {
+        logger.error("markUnread failed:", error);
+        toast.error("Couldn't mark the chat as unread");
+      }
+    },
+    [setUserList],
+  );
+
+  // ── Mute / unmute a talk ──
+  // Only wired up for admin builds — `POST /chat/talk/mute` answers 400
+  // "Access denied" to anyone else, so employees never see the action.
+  const handleMute = useCallback(
+    async (talkId: string, isMuted: boolean, muteUntil: string | null) => {
+      const ok = await toggleMute(talkId, isMuted, muteUntil);
+      if (!ok) {
+        toast.error(
+          isMuted ? "Couldn't mute this chat" : "Couldn't unmute this chat",
+        );
+        return;
+      }
+      if (!isMuted) {
+        toast.success("Notifications on");
+        return;
+      }
+      // "Muted until 9:30 PM" for a timed preset, plain "Muted" for Always.
+      toast.success(muteStatusLabel({ isMuted: true, muteUntil }) || "Notifications muted");
+    },
+    [toggleMute],
+  );
+
   // ── Select chat ──
   const handleSelect = useCallback(
     (data: any) => {
@@ -831,6 +934,8 @@ export function ChatSidebar() {
                         ? handleDelete
                         : undefined
                     }
+                    onMarkUnread={handleMarkUnread}
+                    onMute={canMuteTalks ? handleMute : undefined}
                   />
                 </div>
               ))
@@ -920,6 +1025,8 @@ export function ChatSidebar() {
                 onSelect={handleSelect}
                 onPin={handlePin}
                 onDelete={handleDelete}
+                onMarkUnread={handleMarkUnread}
+                onMute={canMuteTalks ? handleMute : undefined}
               />
             )}
             <ChatSection
@@ -932,6 +1039,8 @@ export function ChatSidebar() {
               onSelect={handleSelect}
               onPin={handlePin}
               onDelete={handleDelete}
+              onMarkUnread={handleMarkUnread}
+              onMute={canMuteTalks ? handleMute : undefined}
             />
           </div>
         )}

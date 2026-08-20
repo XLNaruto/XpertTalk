@@ -22,7 +22,9 @@ export const formatMessage = (text: string): string => {
     /(\bhttps?:\/\/[^\s<]+|\bwww\.[^\s<]+)/gi,
     (url) => {
       const href = url.startsWith("http") ? url : `https://${url}`;
-      return `<a class="text-foreground underline" href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+      // `msg-link` inherits the bubble's text colour — see index.css. A fixed
+      // colour is unreadable on one of the two bubble fills.
+      return `<a class="msg-link" href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(
         url
       )}</a>`;
     }
