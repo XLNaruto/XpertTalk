@@ -38,6 +38,8 @@ function MediaAlbum({
     total === 3 && idx === 0 ? "h-[150px] w-full" : "aspect-square w-full";
 
   return (
+    // Fixed 300px so tiles stay thumbnail-sized — the bubble is sized to the
+    // album, and a long caption wraps inside that width (see message-bubble).
     <div className="grid w-[300px] max-w-full grid-cols-2 gap-[2px]">
       {visible.map((item, idx) => {
         const showCountOverlay = idx === 3 && extraCount > 0;
@@ -50,7 +52,9 @@ function MediaAlbum({
           <div
             key={item.mediaId || `${item.mediaPath}-${idx}`}
             className={cn(
-              "relative overflow-hidden bg-black/15 [.dark_&]:bg-white/5",
+              // A fitted frame leaves space around itself — the wash gives that
+              // space a surface on whichever bubble the tile lands in.
+              "media-plate relative overflow-hidden",
               clickable && "cursor-pointer",
               cellClass(idx),
               spans(idx) && "col-span-2"
@@ -73,7 +77,7 @@ function MediaAlbum({
                   src={item.mediaPath}
                   muted
                   preload="metadata"
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-contain"
                 />
                 <div className="absolute left-1/2 top-1/2 z-[2] flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary/80 backdrop-blur-sm transition-transform hover:scale-110">
                   <Play className="ml-0.5 h-3.5 w-3.5 fill-white text-white" />
@@ -84,7 +88,10 @@ function MediaAlbum({
                 src={item.mediaPath}
                 alt=""
                 loading="lazy"
-                className="h-full w-full object-cover"
+                // Fitted whole, like a lone attachment — `cover` cropped the
+                // top and bottom off a portrait screenshot. The tile fill shows
+                // through whatever the frame doesn't use.
+                className="h-full w-full object-contain"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.visibility = "hidden";
                 }}

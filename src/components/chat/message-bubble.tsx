@@ -49,7 +49,7 @@ import { MessageReactions } from "@/components/chat/message-reactions";
 import { ReactionDetailsDialog } from "@/components/modals/reaction-details-dialog";
 import MediaAlbum from "@/components/chat/media-album";
 import LinkPreviewCard from "@/components/chat/link-preview-card";
-import useLinkPreview from "@/hooks/use-link-preview";
+import { useLinkPreviews } from "@/hooks/use-link-preview";
 import {
   getMediaCount,
   getMediaItems,
@@ -152,17 +152,21 @@ function BubbleTimestamp({
   isReadByAll,
   isEdited,
   noBubble,
+  className,
 }: {
   time: string;
   isSender: boolean;
   isReadByAll?: boolean;
   isEdited?: boolean;
   noBubble?: boolean;
+  /** Overrides the default float placement (used by the caption block). */
+  className?: string;
 }) {
   return (
     <span
       className={cn(
-        "float-right ml-2 my-1 flex items-center gap-1 whitespace-nowrap text-[10px] font-medium leading-none",
+        "flex items-center gap-1 whitespace-nowrap text-[10px] font-medium leading-none",
+        className ?? "float-right ml-2 my-1",
         noBubble
           ? "text-muted-foreground/70"
           : isSender ? "text-white/70" : "text-muted-foreground/70"
@@ -181,6 +185,19 @@ function BubbleTimestamp({
     </span>
   );
 }
+
+// ── Portrait media sizing ──
+
+/** Natural pixel size of a loaded image/video, or null before it loads. */
+type MediaSize = { w: number; h: number } | null;
+
+const isLandscapeSize = (size: MediaSize) => !!size && size.w > size.h;
+
+// Portrait / square media sits in ONE fixed 4:5 box, whatever its own ratio: the
+// frame is fitted whole (`object-contain`) and whatever is left over shows the
+// bubble colour behind it. A box matched to each media's exact ratio made every
+// bubble a different width, and cropping to fill it cut the frame's edges off.
+const PORTRAIT_BOX = "aspect-[4/5] w-[240px]";
 
 // ── Broken image fallback ──
 
@@ -349,8 +366,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   // Orientation of the standalone image, measured on load. Landscape images
   // render as a full-width rectangle at natural aspect; portrait/square images
   // render inside a fixed square box with a color fill.
-  const [imgOrientation, setImgOrientation] = useState<"portrait" | "landscape" | null>(null);
-  const [vidOrientation, setVidOrientation] = useState<"portrait" | "landscape" | null>(null);
+  const [imgSize, setImgSize] = useState<MediaSize>(null);
+  const [vidSize, setVidSize] = useState<MediaSize>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reactionDetailOpen, setReactionDetailOpen] = useState(false);
   const [reactionBarOpen, setReactionBarOpen] = useState(false);
@@ -368,12 +385,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const bodyText = getMessageText(message);
   const hasText = !!bodyText;
 
-  // Unfurl the first link in the text. Skipped for attachments — an album grid
-  // and a link card would fight for the same bubble — and for tombstones.
-  const linkPreview = useLinkPreview(
-    bodyText,
-    hasText && !hasMedia && !message.isDeleted
-  );
+  // Unfurl every link in the text (capped in the hook) — a media CAPTION
+  // unfurls exactly like a text message, so the gate is only "is there text",
+  // never "is this a text bubble". Skipped for tombstones.
+  const linkPreviews = useLinkPreviews(bodyText, hasText && !message.isDeleted);
+  const hasLinkPreviews = linkPreviews.length > 0;
 
   // Edge-to-edge image bubble: only for a lone, uncaptioned, non-reply image.
   const isStandaloneImage =
@@ -524,16 +540,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     if (isConvertingMedia(path)) {
       return <ConvertingMedia />;
     }
-    const isLandscape = imgOrientation === "landscape";
+    const isLandscape = isLandscapeSize(imgSize);
     return (
       <div
         className={cn(
-          "relative cursor-pointer overflow-hidden",
+          "media-plate relative cursor-pointer overflow-hidden",
           isLandscape
             ? // Landscape: full-width rectangle at natural aspect ratio
               "max-w-[360px]"
-            : // Portrait / square: fixed square box with color fill
-              "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
+            : // Portrait / square: fitted whole into the fixed box
+              PORTRAIT_BOX
         )}
         onClick={() =>
           onMediaClick(path, "image", message.messageId, firstItem?.mediaId)
@@ -552,9 +568,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           onLoad={(e) => {
             const img = e.currentTarget;
             if (img.naturalWidth && img.naturalHeight) {
-              setImgOrientation(
-                img.naturalWidth > img.naturalHeight ? "landscape" : "portrait"
-              );
+              setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
             }
           }}
           onError={() => setImgError(true)}
@@ -564,16 +578,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   }
 
   function renderVideo(path: string) {
-    const isLandscape = vidOrientation === "landscape";
+    const isLandscape = isLandscapeSize(vidSize);
     return (
       <div
         className={cn(
-          "group/vid relative cursor-pointer overflow-hidden rounded-xl",
+          "media-plate group/vid relative cursor-pointer overflow-hidden rounded-xl",
           isLandscape
             ? // Landscape: full-width rectangle at natural aspect ratio
               "max-w-[360px]"
-            : // Portrait / square: fixed square box with color fill
-              "flex h-[200px] w-[200px] items-center justify-center bg-black/15 [.dark_&]:bg-white/5"
+            : // Portrait / square: fitted whole into the fixed box
+              PORTRAIT_BOX
         )}
         onClick={() =>
           onMediaClick(path, "video", message.messageId, firstItem?.mediaId)
@@ -589,9 +603,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           onLoadedMetadata={(e) => {
             const vid = e.currentTarget;
             if (vid.videoWidth && vid.videoHeight) {
-              setVidOrientation(
-                vid.videoWidth > vid.videoHeight ? "landscape" : "portrait"
-              );
+              setVidSize({ w: vid.videoWidth, h: vid.videoHeight });
             }
           }}
         />
@@ -643,9 +655,15 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   /** The caption block — also carries the timestamp when text is present. */
   function renderTextBlock(text: string) {
+    // Room the timestamp needs, reserved by an inline spacer at the end of the
+    // text. When the last line has space the stamp sits in it; when it doesn't,
+    // the spacer wraps and the stamp lands on the line it opened up. Widened
+    // for the tick icon (sender) and the "Edited" label.
+    const stampWidth = (isSender ? 62 : 44) + (isEdited ? 40 : 0);
+
     return (
       <div className="pb-1">
-        <div className="px-3.5 pt-[9px]">
+        <div className="relative px-3.5 pt-[9px]">
           <div
             className="text-[14px] leading-[1.55] wrap-break-word"
             style={{
@@ -653,24 +671,45 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               overflowWrap: "break-word",
               wordBreak: "break-word",
             }}
-            dangerouslySetInnerHTML={{ __html: formatMessage(text) }}
-          />
-          {/* With a card below, the timestamp moves under it — otherwise it
+          >
+            <span dangerouslySetInnerHTML={{ __html: formatMessage(text) }} />
+            {!hasLinkPreviews && (
+              <span
+                aria-hidden
+                className="inline-block align-baseline"
+                style={{ width: stampWidth, height: 1 }}
+              />
+            )}
+          </div>
+          {/* With cards below, the timestamp moves under them — otherwise it
               would sit between the link and its own preview. */}
-          {!linkPreview && (
+          {!hasLinkPreviews && (
             <BubbleTimestamp
               time={message.created}
               isSender={isSender}
               isReadByAll={message.isReadByAll}
               isEdited={isEdited}
+              className="absolute bottom-[2px] right-3.5"
             />
           )}
         </div>
 
-        {linkPreview && (
+        {hasLinkPreviews && (
           <>
-            <div className="px-3.5 pt-[6px]">
-              <LinkPreviewCard preview={linkPreview} bare horizontal />
+            {/* One card per link, stacked in the order the links appear. */}
+            <div className="flex flex-col gap-[6px] px-3.5 pt-[6px]">
+              {linkPreviews.map(({ url, preview }) => (
+                <LinkPreviewCard
+                  key={url}
+                  preview={preview}
+                  bare
+                  horizontal
+                  // Under media the bubble is already sized by the tiles, so
+                  // the card fills that width instead of stopping short at its
+                  // own cap and leaving a gap beside it.
+                  className={cn(hasMedia && "min-w-0 max-w-none")}
+                />
+              ))}
             </div>
             <div className="px-3.5">
               <BubbleTimestamp
@@ -913,6 +952,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
     // Glass bubble for everything else. Media and text are independent halves:
     // a media message can carry a caption, so both are rendered when present.
+    // A captioned media bubble is as wide as its media, never as wide as its
+    // caption — a long caption wraps inside the media width instead of leaving
+    // the tiles floating in an over-wide bubble. `min-w` keeps the caption
+    // readable under narrow media (portrait tile, broken-image fallback).
+    const captionedMedia = hasMedia && hasText;
+
     return (
       <div
         className={cn(
@@ -920,6 +965,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           isSender
             ? "rounded-tr-[4px] bubble-sent"
             : "rounded-tl-[4px] bubble-recv",
+          captionedMedia && "min-w-[250px]", // the portrait box + its 5px margins
+          // With cards below, the bubble is sized by the CARD column, not by
+          // the link text: 330px card + 2×14px padding. Without this the long
+          // URLs push the bubble out to the column's full 55% and the capped
+          // cards leave dead space to their right.
+          hasLinkPreviews && !hasMedia && "max-w-[358px]",
           isSelected && "ring-2 ring-primary/40",
           isSelectionMode && "cursor-pointer"
         )}
@@ -933,7 +984,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
         {renderMediaSection()}
 
-        {hasText && renderTextBlock(bodyText)}
+        {/* `w-0 min-w-full` keeps the caption from widening the bubble: it
+            contributes no intrinsic width, then fills whatever the media set. */}
+        {hasText &&
+          (captionedMedia ? (
+            <div className="w-0 min-w-full">{renderTextBlock(bodyText)}</div>
+          ) : (
+            renderTextBlock(bodyText)
+          ))}
 
         {/* Nothing to show but a timestamp (shouldn't happen — defensive). */}
         {!hasText && !hasMedia && (

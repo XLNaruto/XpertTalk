@@ -227,6 +227,27 @@
 }
 
 /* ══════════════════════════════════════════════════════════
+   MEDIA PLATE — the space a fitted frame doesn't use
+   ══════════════════════════════════════════════════════════ */
+/* A frame is fitted whole (object-contain), so its margins need a surface. On
+   the received bubble a translucent wash is enough. Inside the SENT bubble it
+   is not: the wash let the blue gradient through, so every fitted frame sat in
+   a blue field — hence an opaque neutral there, which also keeps a sent and a
+   received album looking the same. */
+.media-plate {
+  background-color: color-mix(in oklab, var(--color-black) 15%, transparent);
+}
+.dark .media-plate {
+  background-color: color-mix(in oklab, var(--color-white) 5%, transparent);
+}
+.bubble-sent .media-plate {
+  background-color: #e9e9ec;
+}
+.dark .bubble-sent .media-plate {
+  background-color: #232329;
+}
+
+/* ══════════════════════════════════════════════════════════
    LINK PREVIEW CARD (inside a message bubble)
    ══════════════════════════════════════════════════════════ */
 /* Tinted from the bubble's OWN text colour, so the card reads correctly on any

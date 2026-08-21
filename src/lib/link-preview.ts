@@ -30,23 +30,51 @@ export interface LinkPreview {
 // Matches the linkifier in message-formatters so a rendered link and the card
 // always agree on what the URL is.
 const URL_RE = /(\bhttps?:\/\/[^\s<]+|\bwww\.[^\s<]+)/i;
+const URL_RE_ALL = new RegExp(URL_RE.source, "gi");
 // Sentence punctuation that follows a URL rather than belonging to it.
 const TRAILING = /[.,;:!?)\]}'"«»]+$/;
 
 const MAX_URL_LENGTH = 2048;
+
+/** How many links of one message are unfurled — the rest render as plain text. */
+export const MAX_PREVIEW_URLS = 3;
+
+/** Trim sentence punctuation, add a scheme, reject the unusable. */
+function normaliseUrl(raw: string): string | null {
+  let url = raw.replace(TRAILING, "");
+  // A closing paren is part of the URL when the URL itself opened one.
+  if (url.length === 0) return null;
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  if (url.length > MAX_URL_LENGTH) return null;
+  return url;
+}
 
 /** First http(s) URL in a message's text (its caption included), or null. */
 export function extractFirstUrl(text?: string | null): string | null {
   if (!text) return null;
   const match = text.match(URL_RE);
   if (!match) return null;
+  return normaliseUrl(match[0]);
+}
 
-  let url = match[0].replace(TRAILING, "");
-  // A closing paren is part of the URL when the URL itself opened one.
-  if (url.length === 0) return null;
-  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  if (url.length > MAX_URL_LENGTH) return null;
-  return url;
+/**
+ * Every http(s) URL in a message's text, normalised and de-duplicated, capped
+ * at `limit`. A message can carry several links and each one gets its own card,
+ * but the cap keeps a link-dump from turning into a wall of cards.
+ */
+export function extractUrls(
+  text?: string | null,
+  limit = MAX_PREVIEW_URLS
+): string[] {
+  if (!text) return [];
+
+  const urls: string[] = [];
+  for (const match of text.matchAll(URL_RE_ALL)) {
+    const url = normaliseUrl(match[0]);
+    if (url && !urls.includes(url)) urls.push(url);
+    if (urls.length >= limit) break;
+  }
+  return urls;
 }
 
 /** Host shown on the card — "example.com", no www. */

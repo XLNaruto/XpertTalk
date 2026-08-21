@@ -17,8 +17,8 @@ import { EmojiPickerPopover } from "@/components/chat/emoji-picker-popover";
 import { FilePreview } from "@/components/chat/file-preview";
 import { MentionList } from "@/components/chat/mention-list";
 import { getMediaCount, previewLabel } from "@/lib/media-items";
-import { extractFirstUrl, getCachedLinkPreview } from "@/lib/link-preview";
-import useLinkPreview from "@/hooks/use-link-preview";
+import { extractUrls, getCachedLinkPreview } from "@/lib/link-preview";
+import { useLinkPreviews } from "@/hooks/use-link-preview";
 import LinkPreviewCard from "@/components/chat/link-preview-card";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
@@ -202,29 +202,30 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
     // request per keystroke. Suppressed for attachments (the caption's card
     // would clash with the album grid, matching how bubbles render).
     const debouncedMessage = useDebouncedValue(message, 700);
-    const [dismissedUrl, setDismissedUrl] = useState<string | null>(null);
+    // Dismissed per URL: hiding one card must not hide the other links' cards.
+    const [dismissedUrls, setDismissedUrls] = useState<string[]>([]);
 
-    // An already-resolved URL skips the debounce entirely — its card comes
+    // Already-resolved URLs skip the debounce entirely — their cards come
     // straight from the module cache, so re-opening edit mode on a link that was
     // just previewed shows the card at once instead of after 700ms of nothing.
-    const liveUrl = extractFirstUrl(message);
+    const liveUrls = extractUrls(message);
     const previewText =
-      liveUrl && getCachedLinkPreview(liveUrl) ? message : debouncedMessage;
+      liveUrls.length > 0 && liveUrls.every((url) => getCachedLinkPreview(url))
+        ? message
+        : debouncedMessage;
 
-    const composerPreview = useLinkPreview(
+    const composerPreviews = useLinkPreviews(
       previewText,
       selectedFiles.length === 0
     );
-    const composerUrl = extractFirstUrl(previewText);
     // Visibility is gated on the LIVE text, not the debounced copy: clearing the
     // composer (send, or closing edit mode) empties `message` at once, and
-    // waiting out the 700ms debounce left the card hanging over an empty box.
-    // Only the card's CONTENT stays debounced, so typing still doesn't refetch.
-    const showComposerPreview =
-      !!composerPreview &&
-      !!composerUrl &&
-      !!liveUrl &&
-      dismissedUrl !== composerUrl;
+    // waiting out the 700ms debounce left cards hanging over an empty box. Only
+    // the cards' CONTENT stays debounced, so typing still doesn't refetch. A
+    // link deleted from the text drops its card immediately, the others stay.
+    const visiblePreviews = composerPreviews.filter(
+      ({ url }) => liveUrls.includes(url) && !dismissedUrls.includes(url)
+    );
 
     // ── Draft hook ──
     const { clearDraft } = useDraft({
@@ -270,7 +271,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       clearFiles();
       setFilteredMentions([]);
       setShowMentionList(false);
-      setDismissedUrl(null);
+      setDismissedUrls([]);
       // Focus input on chat change and initial load
       setTimeout(() => textareaRef.current?.focus(), 100);
     }, [talkId, clearFiles]);
@@ -449,9 +450,9 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
 
         emitStopTyping();
         clearDraft();
-        // The dismissal belongs to the draft that was just sent — keeping it
-        // would silently suppress the card the next time the same URL is typed.
-        setDismissedUrl(null);
+        // Dismissals belong to the draft that was just sent — keeping them
+        // would silently suppress those cards the next time the URLs are typed.
+        setDismissedUrls([]);
         setShowMentionList(false);
         setFilteredMentions([]);
         onSend({ isEdit: wasEdit });
@@ -647,17 +648,34 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
         {/* Link preview of the URL being typed. The row shape keeps the
             composer short — the stacked hero card ate most of the chat's
             vertical space just to preview one link. */}
-        {showComposerPreview && (
-          <div className="flex items-start gap-2 px-4 pt-3">
-            <LinkPreviewCard preview={composerPreview} bare horizontal />
-            <button
-              type="button"
-              title="Remove preview"
-              onClick={() => setDismissedUrl(composerUrl)}
-              className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+        {visiblePreviews.length > 0 && (
+          // One card per link, each dismissible on its own. Every card gets the
+          // SAME box — a hero image or a one-line description must not make one
+          // card taller or narrower than its neighbours — and the row scrolls
+          // sideways so several cards never push the composer off-screen.
+          <div className="flex items-stretch gap-2 overflow-x-auto px-4 pt-3">
+            {visiblePreviews.map(({ url, preview }) => (
+              <div key={url} className="flex shrink-0 items-stretch gap-0.5">
+                <LinkPreviewCard
+                  preview={preview}
+                  bare
+                  horizontal
+                  className="h-full w-[300px] max-w-none"
+                />
+                <button
+                  type="button"
+                  title="Remove preview"
+                  onClick={() =>
+                    setDismissedUrls((prev) =>
+                      prev.includes(url) ? prev : [...prev, url]
+                    )
+                  }
+                  className="mt-0.5 flex h-6 w-6 shrink-0 self-start items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 

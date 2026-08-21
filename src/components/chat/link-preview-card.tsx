@@ -20,6 +20,12 @@ interface LinkPreviewCardProps {
    * is for the composer, where the card is the only thing in the box.
    */
   horizontal?: boolean;
+  /**
+   * Extra classes on the card root — merged last, so a caller can override the
+   * default sizing. The composer uses it to give every card the same box, which
+   * is what keeps a row of cards aligned regardless of hero image or text.
+   */
+  className?: string;
 }
 
 /**
@@ -41,6 +47,7 @@ function LinkPreviewCard({
   preview,
   bare = false,
   horizontal = false,
+  className,
 }: LinkPreviewCardProps) {
   const [imgFailed, setImgFailed] = useState(false);
 
@@ -69,7 +76,8 @@ function LinkPreviewCard({
         onClick={open}
         className={cn(
           "msg-chip flex w-[270px] max-w-full cursor-pointer items-center gap-2 overflow-hidden rounded-xl px-3 py-2 text-[12px]",
-          !bare && "mx-[5px] mt-[5px]"
+          !bare && "mx-[5px] mt-[5px]",
+          className
         )}
       >
         <Link2 className="h-3.5 w-3.5 shrink-0 opacity-70" />
@@ -87,7 +95,8 @@ function LinkPreviewCard({
         // column's full 55%, which is far wider than the link above it.
         className={cn(
           "msg-card flex w-full min-w-[220px] max-w-[330px] cursor-pointer items-stretch overflow-hidden rounded-lg",
-          !bare && "mx-[5px] mt-[5px]"
+          !bare && "mx-[5px] mt-[5px]",
+          className
         )}
       >
         {hero && (
@@ -148,7 +157,8 @@ function LinkPreviewCard({
       // intrinsic size, the way a text-only bubble sizes to its text.
       className={cn(
         "msg-card w-[270px] max-w-full cursor-pointer overflow-hidden rounded-xl",
-        !bare && "mx-[5px] mt-[5px]"
+        !bare && "mx-[5px] mt-[5px]",
+        className
       )}
     >
       {hero && (
