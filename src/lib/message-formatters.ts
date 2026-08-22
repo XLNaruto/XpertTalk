@@ -7,6 +7,12 @@ import { format, startOfDay, subDays, differenceInDays } from "date-fns";
 export const formatMessage = (text: string): string => {
   if (!text) return "";
 
+  // Trailing blank lines would render as <br/> and push the timestamp spacer
+  // (see BubbleTimestamp in message-bubble) onto a line of its own, so the
+  // stamp sits UNDER the text instead of beside it.
+  text = text.replace(/[\s\u00a0]+$/, "");
+  if (!text) return "";
+
   const escapeHtml = (unsafe: string) =>
     unsafe
       .replace(/&/g, "&amp;")
@@ -36,7 +42,10 @@ export const formatMessage = (text: string): string => {
     .replace(/(^|\s)\*(\S(.*?\S)?)\*/g, "$1<b>$2</b>") // Bold: *text*
     .replace(/(^|\s)_(\S(.*?\S)?)_/g, "$1<i>$2</i>") // Italic: _text_
     .replace(/(^|\s)~(\S(.*?\S)?)~/g, "$1<del>$2</del>") // Strikethrough: ~text~
-    .replace(/\n/g, "<br/>"); // Preserve new lines
+    .replace(/\n/g, "<br/>") // Preserve new lines
+    // Defensive: a break can still land at the very end (e.g. text that was
+    // only whitespace after a newline) — it must not add an empty last line.
+    .replace(/(?:<br\/>)+$/, "");
 };
 
 /**

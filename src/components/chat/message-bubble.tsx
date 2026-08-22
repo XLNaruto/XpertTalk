@@ -166,7 +166,7 @@ function BubbleTimestamp({
     <span
       className={cn(
         "flex items-center gap-1 whitespace-nowrap text-[10px] font-medium leading-none",
-        className ?? "float-right ml-2 my-1",
+        className ?? "ml-auto mt-[3px] w-fit",
         noBubble
           ? "text-muted-foreground/70"
           : isSender ? "text-white/70" : "text-muted-foreground/70"
@@ -655,15 +655,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   /** The caption block — also carries the timestamp when text is present. */
   function renderTextBlock(text: string) {
-    // Room the timestamp needs, reserved by an inline spacer at the end of the
-    // text. When the last line has space the stamp sits in it; when it doesn't,
-    // the spacer wraps and the stamp lands on the line it opened up. Widened
-    // for the tick icon (sender) and the "Edited" label.
-    const stampWidth = (isSender ? 62 : 44) + (isEdited ? 40 : 0);
-
     return (
       <div className="pb-1">
-        <div className="relative px-3.5 pt-[9px]">
+        <div className="px-3.5 pt-[9px]">
           <div
             className="text-[14px] leading-[1.55] wrap-break-word"
             style={{
@@ -673,23 +667,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             }}
           >
             <span dangerouslySetInnerHTML={{ __html: formatMessage(text) }} />
-            {!hasLinkPreviews && (
-              <span
-                aria-hidden
-                className="inline-block align-baseline"
-                style={{ width: stampWidth, height: 1 }}
-              />
-            )}
           </div>
-          {/* With cards below, the timestamp moves under them — otherwise it
-              would sit between the link and its own preview. */}
+          {/* The stamp gets its own row under the text, right-aligned. With
+              cards below it moves under them instead — otherwise it would sit
+              between the link and its own preview. */}
           {!hasLinkPreviews && (
             <BubbleTimestamp
               time={message.created}
               isSender={isSender}
               isReadByAll={message.isReadByAll}
               isEdited={isEdited}
-              className="absolute bottom-[2px] right-3.5"
             />
           )}
         </div>

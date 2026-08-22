@@ -64,7 +64,11 @@ export function getMediaItems(message: any): MediaItem[] {
   return itemsFrom(src);
 }
 
-/** The message's own text — the caption on a media message. Forward-aware. */
+/**
+ * The message's own text — the caption on a media message. Forward-aware.
+ * Trimmed: stray leading/trailing blank lines would render as empty rows in the
+ * bubble and push the inline timestamp off the text's last line.
+ */
 export function getMessageText(message: any): string {
   if (!message || message.isDeleted) return "";
   if (message.forwardFromMessageId) {
@@ -72,9 +76,9 @@ export function getMessageText(message: any): string {
       message.forwardedMessageText ||
       message.forwardMessage?.messageText ||
       ""
-    );
+    ).trim();
   }
-  return message.messageText || "";
+  return (message.messageText || "").trim();
 }
 
 /** Attachment count for previews — uses the server's `mediaCount` when present. */
