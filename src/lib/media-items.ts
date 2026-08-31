@@ -51,17 +51,23 @@ function itemsFrom(src: any): MediaItem[] {
 }
 
 /**
- * Ordered attachments of a message, resolving forwards to the original message
- * (a forward clones the whole album) and returning `[]` for text messages and
+ * Ordered attachments of a message, returning `[]` for text messages and
  * deleted tombstones.
+ *
+ * A forward gets its own copies of every attachment, so the forward's OWN
+ * `mediaItems[]` is the authoritative album — `forwardMessage` is only a
+ * preview of the original and carries flat fields (one attachment) plus a
+ * `mediaCount`. Reading it first rendered a forwarded 4-image album as a
+ * single image, so it is used only when the message itself has no media.
  */
 export function getMediaItems(message: any): MediaItem[] {
   if (!message || message.isDeleted) return [];
-  const src =
-    message.forwardFromMessageId && message.forwardMessage
-      ? message.forwardMessage
-      : message;
-  return itemsFrom(src);
+  const own = itemsFrom(message);
+  if (own.length > 0) return own;
+  if (message.forwardFromMessageId && message.forwardMessage) {
+    return itemsFrom(message.forwardMessage);
+  }
+  return [];
 }
 
 /**
@@ -85,7 +91,13 @@ export function getMessageText(message: any): string {
 export function getMediaCount(message: any): number {
   if (!message) return 0;
   if (typeof message.mediaCount === "number") return message.mediaCount;
-  return getMediaItems(message).length;
+  const items = getMediaItems(message);
+  if (items.length > 0) return items.length;
+  // Preview-only shapes (reply/forward strips, talk-list lastMessage) carry the
+  // count without the items.
+  if (typeof message.forwardMessage?.mediaCount === "number")
+    return message.forwardMessage.mediaCount;
+  return 0;
 }
 
 const SINGULAR: Record<string, string> = {
