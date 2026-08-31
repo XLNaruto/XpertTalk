@@ -12,6 +12,8 @@ export interface MediaSlide {
   messageId: string;
   /** Identifies WHICH attachment of the message this slide is. */
   mediaId?: string;
+  /** How many attachments the parent message carries — >1 means an album. */
+  mediaCount?: number;
   forwardFromMessageId?: string;
   mediaPath: string;
   mediaName?: string;
@@ -30,11 +32,13 @@ export default function useMediaLightbox(formattedMessages: any[]) {
     const out: MediaSlide[] = [];
     for (const msg of formattedMessages) {
       if (!msg || msg.isDeleted) continue;
-      for (const item of getMediaItems(msg)) {
+      const items = getMediaItems(msg);
+      for (const item of items) {
         if (!isViewable(item) || !item.mediaPath) continue;
         const common = {
           messageId: msg.messageId,
           mediaId: item.mediaId,
+          mediaCount: items.length,
           forwardFromMessageId: msg.forwardFromMessageId,
           mediaPath: item.mediaPath,
           mediaName: item.mediaName,
@@ -153,7 +157,19 @@ export default function useMediaLightbox(formattedMessages: any[]) {
         });
 
       // The gallery returns one row per attachment, so album rows share a
-      // messageId — mediaId is what identifies the clicked one.
+      // messageId: counting rows per message tells the lightbox whether the
+      // open slide belongs to an album (a single-item forward) or is the
+      // message's only attachment (forward the message itself).
+      const perMessage = new Map<string, number>();
+      for (const s of extSlides) {
+        if (!s.messageId) continue;
+        perMessage.set(s.messageId, (perMessage.get(s.messageId) || 0) + 1);
+      }
+      for (const s of extSlides) {
+        s.mediaCount = s.messageId ? perMessage.get(s.messageId) || 1 : 1;
+      }
+
+      // mediaId is what identifies the clicked one.
       let clickedIndex = mediaId
         ? extSlides.findIndex((s) => s.mediaId && s.mediaId === mediaId)
         : -1;

@@ -101,6 +101,9 @@ export function ChatArea() {
   const [isFileDragging, setIsFileDragging] = useState(false);
   const [forwardOpen, setForwardOpen] = useState(false);
   const [forwardMessageIds, setForwardMessageIds] = useState<string[]>([]);
+  // Non-empty only for a single-attachment forward out of an album (the
+  // lightbox toolbar). Every other entry point forwards whole messages.
+  const [forwardMediaIds, setForwardMediaIds] = useState<string[]>([]);
   const [lightboxDeleteOpen, setLightboxDeleteOpen] = useState(false);
   const [selectionDeleteOpen, setSelectionDeleteOpen] = useState(false);
   const [isPinnedSheetOpen, setIsPinnedSheetOpen] = useState(false);
@@ -862,6 +865,7 @@ export function ChatArea() {
       .map((msg: any) => msg.forwardFromMessageId || msg.messageId)
       .filter(Boolean);
     if (ids.length > 0) {
+      setForwardMediaIds([]);
       setForwardMessageIds(ids);
       setForwardOpen(true);
     }
@@ -870,6 +874,7 @@ export function ChatArea() {
   const handleForward = useCallback((msg: any) => {
     const id = msg.forwardFromMessageId || msg.messageId;
     if (id) {
+      setForwardMediaIds([]);
       setForwardMessageIds([id]);
       setForwardOpen(true);
     }
@@ -880,6 +885,7 @@ export function ChatArea() {
       .map((m: any) => m.forwardFromMessageId || m.messageId)
       .filter(Boolean);
     if (ids.length > 0) {
+      setForwardMediaIds([]);
       setForwardMessageIds(ids);
       setForwardOpen(true);
     }
@@ -1119,6 +1125,7 @@ export function ChatArea() {
         open={forwardOpen}
         onOpenChange={setForwardOpen}
         messageIds={forwardMessageIds}
+        mediaIds={forwardMediaIds}
         onForwarded={cancelSelection}
       />
 
@@ -1218,8 +1225,22 @@ export function ChatArea() {
                   aria-label="Forward"
                   onClick={() => {
                     if (!currentSlide) return;
+                    // From the preview only the open attachment goes: an album
+                    // forwards just this image, a lone attachment forwards its
+                    // message (which keeps the "Forwarded" label). Forwarding
+                    // the whole album is the grid/context-menu action.
+                    const isAlbumItem =
+                      (currentSlide.mediaCount ?? 1) > 1 && !!currentSlide.mediaId;
+                    if (isAlbumItem) {
+                      setForwardMediaIds([currentSlide.mediaId!]);
+                      setForwardMessageIds([]);
+                      setForwardOpen(true);
+                      closeLightbox();
+                      return;
+                    }
                     const id = currentSlide.forwardFromMessageId || currentSlide.messageId;
                     if (id) {
+                      setForwardMediaIds([]);
                       setForwardMessageIds([id]);
                       setForwardOpen(true);
                       closeLightbox();

@@ -25,6 +25,13 @@ interface ForwardDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   messageIds: string[];
+  /**
+   * Forward only these attachments instead of whole messages. Set when the user
+   * forwards one image out of an album from the lightbox — `forwardFromMessageId`
+   * clones the entire album server-side, so a single-item forward has to go out
+   * as a fresh media message carrying just that `mediaId`.
+   */
+  mediaIds?: string[];
   onForwarded?: () => void;
 }
 
@@ -32,6 +39,7 @@ export function ForwardDialog({
   open,
   onOpenChange,
   messageIds,
+  mediaIds,
   onForwarded,
 }: ForwardDialogProps) {
   const [userList, setUserList] = useState<any[]>([]);
@@ -90,7 +98,7 @@ export function ForwardDialog({
 
   // Forward via socket — temporary connection per target talk
   const forwardViaSocket = useCallback(
-    (talkId: string, msgId: string): Promise<void> =>
+    (talkId: string, payload: Record<string, any>): Promise<void> =>
       new Promise((resolve, reject) => {
         const socket: Socket = io(`${WS_URL}/talk`, {
           path: "/socket.io/",
@@ -108,7 +116,7 @@ export function ForwardDialog({
         socket.on("connect", () => {
           socket.emit(
             "sendMessage",
-            { forwardFromMessageId: msgId },
+            payload,
             (ack: any) => {
               cleanup();
               if (ack?.success) {
@@ -140,14 +148,20 @@ export function ForwardDialog({
       toast.error("Select at least one recipient");
       return;
     }
-    if (messageIds.length === 0) return;
+    // One payload per outgoing message: either a whole-message forward, or a
+    // single attachment picked out of an album.
+    const payloads: Record<string, any>[] =
+      mediaIds && mediaIds.length > 0
+        ? [{ message: "", mediaIds }]
+        : messageIds.map((id) => ({ forwardFromMessageId: id }));
+    if (payloads.length === 0) return;
 
     setLoading(true);
     try {
-      for (const msgId of messageIds) {
+      for (const payload of payloads) {
         // Forward to all selected talks in parallel
         const results = await Promise.allSettled(
-          selectedTalkIds.map((talkId) => forwardViaSocket(talkId, msgId))
+          selectedTalkIds.map((talkId) => forwardViaSocket(talkId, payload))
         );
         const failed = results.filter((r) => r.status === "rejected");
         if (failed.length > 0) {
@@ -160,7 +174,7 @@ export function ForwardDialog({
         }
       }
       toast.success(
-        `Message${messageIds.length > 1 ? "s" : ""} forwarded to ${selectedTalkIds.length} chat${selectedTalkIds.length > 1 ? "s" : ""}`
+        `Message${payloads.length > 1 ? "s" : ""} forwarded to ${selectedTalkIds.length} chat${selectedTalkIds.length > 1 ? "s" : ""}`
       );
       onForwarded?.();
       onOpenChange(false);
