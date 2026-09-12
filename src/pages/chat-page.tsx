@@ -10,6 +10,8 @@ import {
 } from "@/lib/encryption";
 import { apiHeader, postData } from "@/lib/api-helper";
 import logger from "@/lib/logger";
+import { useEventsStore } from "@/stores/events-store";
+import { toast } from "sonner";
 import { Bell, X } from "lucide-react";
 
 // userStage removed — endpoints now use common prefix
@@ -36,6 +38,20 @@ function decodeFcmParam(raw: string | null) {
   } catch {
     return {};
   }
+}
+
+/**
+ * Event pushes carry `type: "event_*"` and deliberately have no `talkId` — an
+ * event is not a conversation, so they must not go through chat-notification
+ * suppression. Any `event_*` value counts, for forward compatibility.
+ */
+function isEventPush(data: any) {
+  return typeof data?.type === "string" && data.type.startsWith("event_");
+}
+
+/** Both spellings carry the same value; either may be present. */
+function eventIdOf(data: any): string {
+  return String(data?.event_id || data?.eventId || "");
 }
 
 function InitChat() {
@@ -78,6 +94,14 @@ function InitChat() {
   useEffect(() => {
     if (urlMessageId) setDeepLinkMessageId(String(urlMessageId));
   }, [urlMessageId, setDeepLinkMessageId]);
+
+  // Notification deep-link for an event: open the events surface on it. The
+  // details view re-fetches, so a stale reminder still shows the truth.
+  const openEventDetail = useEventsStore((s) => s.openEventDetail);
+  const eventDeepLinkId = isEventPush(mergedData) ? eventIdOf(mergedData) : "";
+  useEffect(() => {
+    if (eventDeepLinkId) openEventDetail(eventDeepLinkId);
+  }, [eventDeepLinkId, openEventDetail]);
 
   // Fetch user list on mount and when layout changes
   useEffect(() => {
@@ -281,6 +305,28 @@ function InitChat() {
         const { onMessage } = await import("firebase/messaging");
         unsubscribe = onMessage(messaging, (payload) => {
           const data = payload.data || payload.notification || {};
+
+          if (isEventPush(payload.data)) {
+            const id = eventIdOf(payload.data);
+            // The server pre-renders this text — show it, don't re-render it.
+            const title = payload.notification?.title || data.title || "Event";
+            const body = payload.notification?.body || data.body || "";
+            toast(title, {
+              description: body,
+              action: id
+                ? { label: "View", onClick: () => openEventDetail(id) }
+                : undefined,
+            });
+            // Anything on screen may now be stale (moved, cancelled, added).
+            if (useEventsStore.getState().isOpen) {
+              useEventsStore.getState().refreshList();
+              if (useEventsStore.getState().activeEventId === id && id) {
+                useEventsStore.getState().loadDetail(id);
+              }
+            }
+            return;
+          }
+
           if (data.title || data.body) {
             logger.debug(`${data.title || "New Message"}: ${data.body || ""}`);
           }
@@ -290,7 +336,7 @@ function InitChat() {
       }
     })();
     return () => unsubscribe?.();
-  }, []);
+  }, [openEventDetail]);
 
   // Notification click on an already-open app: the SW posts OPEN_CHAT and we
   // switch the active chat in place (no reload).
@@ -299,6 +345,12 @@ function InitChat() {
     const handler = (event: MessageEvent) => {
       if (event.data?.type !== "OPEN_CHAT") return;
       const d = normalizeNotifData(event.data.data);
+      if (isEventPush(d)) {
+        // Not a conversation — open the event instead of switching chats.
+        const id = eventIdOf(d);
+        if (id) openEventDetail(id);
+        return;
+      }
       logger.info("[OPEN_CHAT] raw:", event.data.data);
       logger.info("[OPEN_CHAT] normalized:", d);
       const chat = {
@@ -320,7 +372,7 @@ function InitChat() {
     };
     navigator.serviceWorker.addEventListener("message", handler);
     return () => navigator.serviceWorker.removeEventListener("message", handler);
-  }, [setActiveChat, setDeepLinkMessageId, navigate]);
+  }, [setActiveChat, setDeepLinkMessageId, navigate, openEventDetail]);
 
   // Window focus/blur + visibility change listeners
   useEffect(() => {

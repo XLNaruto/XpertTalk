@@ -68,7 +68,9 @@ self.addEventListener("push", (event) => {
           icon: ICON_URL,
           badge: BADGE_URL,
           vibrate: [100, 50, 100],
-          tag: "xperttalk-" + (data.talkId || Date.now()),
+          tag: isEventPush(data)
+            ? "xperttalk-event-" + (eventIdOf(data) || Date.now())
+            : "xperttalk-" + (data.talkId || Date.now()),
           renotify: true,
           data: data,
         };
@@ -76,6 +78,15 @@ self.addEventListener("push", (event) => {
       })
   );
 });
+
+// Event pushes (type: "event_*") carry no talkId — they are not conversations.
+function isEventPush(data) {
+  return typeof data.type === "string" && data.type.indexOf("event_") === 0;
+}
+
+function eventIdOf(data) {
+  return data.event_id || data.eventId || "";
+}
 
 // Unicode-safe base64 encode (btoa alone breaks on non-Latin1 chars).
 function encodeFcmData(data) {
@@ -94,7 +105,11 @@ self.addEventListener("notificationclick", (event) => {
   console.log("[firebase-sw] notificationclick data:", JSON.stringify(data), data);
   // Deep-link URL used only when no app window is open. The client reads the
   // `data` param (base64 JSON) to select the chat on load.
-  const target = `${BASE}/chats?data=${encodeFcmData(data)}`;
+  // The client reads `fcm` as base64 JSON; the event branch uses it so the app
+  // can open the event on a cold start.
+  const target = isEventPush(data)
+    ? `${BASE}/chats?fcm=${encodeFcmData(data)}`
+    : `${BASE}/chats?data=${encodeFcmData(data)}`;
   console.log("[firebase-sw] notificationclick target:", target);
 
   event.waitUntil(

@@ -3,6 +3,7 @@ import useIsMobile from "@/hooks/use-is-mobile";
 import { ChatSidebar } from "@/components/chat/chat-sidebar";
 import { ChatArea } from "@/components/chat/chat-area";
 import { EmptyState } from "@/components/chat/empty-state";
+import { EventsSheet } from "@/components/events/events-sheet";
 
 export function ChatLayout() {
   const isMobile = useIsMobile();
@@ -16,12 +17,14 @@ export function ChatLayout() {
       return (
         <div className="h-screen bg-background">
           <ChatArea />
+          <EventsSheet />
         </div>
       );
     }
     return (
       <div className="h-screen overflow-hidden bg-background">
         <ChatSidebar />
+        <EventsSheet />
       </div>
     );
   }
@@ -35,6 +38,7 @@ export function ChatLayout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         {showChatArea ? <ChatArea /> : <EmptyState />}
       </div>
+      <EventsSheet />
     </div>
   );
 }
