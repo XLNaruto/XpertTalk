@@ -19,6 +19,8 @@ interface ChatHeaderProps {
   isSelectionMode: boolean;
   selectedCount: number;
   canDeleteSelected: boolean;
+  /** False when the selection holds something unforwardable (a poll). */
+  canForwardSelected: boolean;
   onBackClick: () => void;
   onProfileClick: () => void;
   onCancelSelection: () => void;
@@ -59,6 +61,7 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
   isSelectionMode,
   selectedCount,
   canDeleteSelected,
+  canForwardSelected,
   onBackClick,
   onProfileClick,
   onCancelSelection,
@@ -246,15 +249,17 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
                   {selectedCount} selected
                 </span>
               )}
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Forward"
-                className="rounded-lg hover:bg-primary/10 hover:text-primary"
-                onClick={onForwardSelected}
-              >
-                <Forward className="h-4 w-4" />
-              </Button>
+              {canForwardSelected && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Forward"
+                  className="rounded-lg hover:bg-primary/10 hover:text-primary"
+                  onClick={onForwardSelected}
+                >
+                  <Forward className="h-4 w-4" />
+                </Button>
+              )}
               {canDeleteSelected && (
                 <Button
                   variant="ghost"

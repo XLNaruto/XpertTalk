@@ -86,6 +86,13 @@ export default function useMessageSelection({
         Date.now() - new Date(msg.created).getTime() < 24 * 60 * 60 * 1000)
   );
 
+  // A poll is bound to the talk it was created in — a forwarded copy would
+  // carry no tally and could not be voted on, so one poll in the selection
+  // takes Forward away.
+  const canForwardSelected =
+    selectedMessages.length > 0 &&
+    selectedMessages.every((msg: any) => !msg.poll);
+
   return {
     isSelectionMode,
     selectedMessages,
@@ -95,5 +102,6 @@ export default function useMessageSelection({
     enterSelectionModeMultiple,
     cancelSelection,
     canDeleteSelected,
+    canForwardSelected,
   };
 }

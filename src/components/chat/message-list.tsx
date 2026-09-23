@@ -44,6 +44,8 @@ interface MessageListProps {
   onToggleReaction: (messageId: string, reaction: string) => void;
   onTogglePin: (messageId: string) => void;
   onMarkUnread: (message: any) => void;
+  onVotePoll: (messageId: string, poll: any, optionIds: string[]) => void;
+  onClosePoll: (messageId: string) => Promise<void>;
 }
 
 // ── Media group detection ──
@@ -179,6 +181,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
   onToggleReaction,
   onTogglePin,
   onMarkUnread,
+  onVotePoll,
+  onClosePoll,
 }, ref) {
   const chatuserId = getEncodedCookie("chatuserId") || "";
 
@@ -974,6 +978,8 @@ export const MessageList = React.forwardRef<MessageListHandle, MessageListProps>
                 onToggleReaction={onToggleReaction}
                 onTogglePin={onTogglePin}
                 onMarkUnread={onMarkUnread}
+                onVotePoll={onVotePoll}
+                onClosePoll={onClosePoll}
               />
             </div>
           );

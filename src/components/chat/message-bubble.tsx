@@ -17,6 +17,8 @@ import {
   PinOff,
   Ban,
   MailOpen,
+  Users,
+  Lock,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -60,6 +62,9 @@ import {
 } from "@/lib/media-items";
 import { downloadMedia, downloadMediaItems } from "@/lib/download-media";
 import logger from "@/lib/logger";
+import PollBubble from "@/components/chat/poll-bubble";
+import { PollVotersDialog } from "@/components/chat/poll-voters-dialog";
+import { pollShowsResults, type Poll } from "@/lib/polls";
 
 // ── Sender name color palette (vibrant, gamified) ──
 
@@ -116,6 +121,18 @@ interface MessageBubbleProps {
   onToggleReaction: (messageId: string, reaction: string) => void;
   onTogglePin: (messageId: string) => void;
   onMarkUnread: (message: any) => void;
+  /** `optionIds` is the COMPLETE selection — `[]` retracts the vote. */
+  onVotePoll: (messageId: string, poll: Poll, optionIds: string[]) => void;
+  onClosePoll: (messageId: string) => Promise<void>;
+  /**
+   * Renders on a surface that does NOT track live updates (the pinned sheet).
+   * Reading stays whole — links, media, downloads, the context menu — but the
+   * controls whose result could not be shown back (reacting, voting) are off.
+   */
+  readOnly?: boolean;
+  /** Overrides the bubble column width — narrow surfaces (the pinned sheet)
+   *  need more than the 55% the chat pane gives. Ignored for polls. */
+  bubbleMaxWidthClass?: string;
 }
 
 // ── Time overlay for standalone media ──
@@ -361,6 +378,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onToggleReaction,
   onTogglePin,
   onMarkUnread,
+  onVotePoll,
+  onClosePoll,
+  bubbleMaxWidthClass,
+  readOnly = false,
 }) => {
   const [imgError, setImgError] = useState(false);
   // Orientation of the standalone image, measured on load. Landscape images
@@ -371,6 +392,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reactionDetailOpen, setReactionDetailOpen] = useState(false);
   const [reactionBarOpen, setReactionBarOpen] = useState(false);
+  // Owned here, not by the poll bubble, so the context menu and the bubble's own
+  // "View votes" open the same dialog.
+  const [votersOpen, setVotersOpen] = useState(false);
+  const [votersOptionId, setVotersOptionId] = useState<string | null>(null);
+  // Closing is owned here too, so the bubble's button and the context-menu item
+  // share one confirmation and one in-flight state.
+  const [closePollOpen, setClosePollOpen] = useState(false);
+  const [closingPoll, setClosingPoll] = useState(false);
   const chatuserId = getEncodedCookie("chatuserId") || "";
 
   // Every message renders from its ordered attachment list — a single
@@ -380,6 +409,32 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const isAlbum = mediaItems.length > 1;
   const firstItem = mediaItems[0];
 
+  // A poll IS a message: it arrives with a `poll` object attached. A DELETED
+  // poll message carries no `poll` at all, so the tombstone path below wins.
+  const poll: Poll | null = !message.isDeleted && message.poll ? message.poll : null;
+  // The voters list is a result, so it follows the bubble's own gate exactly.
+  const showPollResults = pollShowsResults(poll, isSender);
+  const canViewVotes =
+    showPollResults && !poll!.isAnonymous && (poll!.voterCount || 0) > 0;
+
+  // Same creator fallback as the poll bubble: a just-created poll arrives on a
+  // broadcast, which never carries `canClose`.
+  const canClosePoll = !!poll && (!!poll.canClose || isSender) && !poll.isClosed;
+
+  const openVoters = (optionId: string | null) => {
+    setVotersOptionId(optionId);
+    setVotersOpen(true);
+  };
+
+  const confirmClosePoll = async () => {
+    setClosingPoll(true);
+    try {
+      await onClosePoll(message.messageId);
+    } finally {
+      setClosingPoll(false);
+    }
+  };
+
   // The message's text. On a media message this is the CAPTION — never gate it
   // on `messageType`, which only describes how to render the bubble.
   const bodyText = getMessageText(message);
@@ -388,7 +443,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   // Unfurl every link in the text (capped in the hook) — a media CAPTION
   // unfurls exactly like a text message, so the gate is only "is there text",
   // never "is this a text bubble". Skipped for tombstones.
-  const linkPreviews = useLinkPreviews(bodyText, hasText && !message.isDeleted);
+  const linkPreviews = useLinkPreviews(bodyText, hasText && !message.isDeleted && !poll);
   const hasLinkPreviews = linkPreviews.length > 0;
 
   // Edge-to-edge image bubble: only for a lone, uncaptioned, non-reply image.
@@ -433,21 +488,30 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   // ── Context menu items ──
 
+  // On a read-only surface the menu keeps only what acts on the message as it
+  // stands — forward, copy, download, unpin, and a poll's votes. Composing
+  // (reply, edit), selection, unread and delete all belong to the conversation.
   const contextMenuContent = (
     <ContextMenuContent className="min-w-[160px] rounded-xl border-border/50 bg-popover p-1.5 shadow-xl">
+      {!readOnly && (
       <ContextMenuItem
         onClick={() => onReply(message)}
         className="gap-2 rounded-lg px-2.5 py-2 text-sm"
       >
         <Reply className="h-4 w-4" /> Reply
       </ContextMenuItem>
-      <ContextMenuItem
-        onClick={() => onForward(message)}
-        className="gap-2 rounded-lg px-2.5 py-2 text-sm"
-      >
-        <Forward className="h-4 w-4" /> Forward
-      </ContextMenuItem>
-      {!isSelectionMode && (
+      )}
+      {/* No Forward on a poll — a poll is bound to the talk it was created in;
+          a copy of it would carry no tally and could not be voted on. */}
+      {!poll && (
+        <ContextMenuItem
+          onClick={() => onForward(message)}
+          className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+        >
+          <Forward className="h-4 w-4" /> Forward
+        </ContextMenuItem>
+      )}
+      {!isSelectionMode && !readOnly && (
         <ContextMenuItem
           onClick={() => onEnterSelectionMode(message)}
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
@@ -456,8 +520,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         </ContextMenuItem>
       )}
       {/* Copy text — driven by whether there IS text, not by messageType, so a
-          captioned image offers it too. */}
-      {hasText && (
+          captioned image offers it too. A poll is excluded: its text is the
+          question, and a question without its options copies to nothing useful. */}
+      {hasText && !poll && (
         <ContextMenuItem
           onClick={handleCopy}
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
@@ -468,7 +533,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       {/* Edit — the caption lives in the same `messageText` a text message uses,
           so editing works on a media message too, including adding a caption
           where there wasn't one. */}
-      {isSender && !message.forwardFromMessageId && isWithin24Hours && (
+      {/* No Edit on a poll — the server rejects poll edits outright. */}
+      {isSender && !poll && !readOnly && !message.forwardFromMessageId && isWithin24Hours && (
         <ContextMenuItem
           onClick={() => onEdit(message)}
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
@@ -494,7 +560,24 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           {isAlbum ? `Download all (${mediaItems.length})` : "Download"}
         </ContextMenuItem>
       )}
-      {message.reactions?.length > 0 && (
+      {canViewVotes && (
+        <ContextMenuItem
+          onClick={() => openVoters(null)}
+          className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+        >
+          <Users className="h-4 w-4" /> View votes
+        </ContextMenuItem>
+      )}
+      {/* Creator or group admin only — `canClose` comes from an addressed payload. */}
+      {canClosePoll && !readOnly && (
+        <ContextMenuItem
+          onClick={() => setClosePollOpen(true)}
+          className="gap-2 rounded-lg px-2.5 py-2 text-sm"
+        >
+          <Lock className="h-4 w-4" /> Close poll
+        </ContextMenuItem>
+      )}
+      {message.reactions?.length > 0 && !readOnly && (
         <ContextMenuItem
           onClick={() => setReactionDetailOpen(true)}
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
@@ -502,7 +585,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           <SmilePlus className="h-4 w-4" /> View Reactions
         </ContextMenuItem>
       )}
-      {!isSender && (
+      {!isSender && !readOnly && (
         <ContextMenuItem
           onClick={() => onMarkUnread(message)}
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
@@ -518,7 +601,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           ? <><PinOff className="h-4 w-4" /> Unpin</>
           : <><Pin className="h-4 w-4" /> Pin</>}
       </ContextMenuItem>
-      {isSender && isWithin24Hours && (
+      {isSender && isWithin24Hours && !readOnly && (
         <ContextMenuItem
           className="gap-2 rounded-lg px-2.5 py-2 text-sm"
           onClick={() => setDeleteConfirmOpen(true)}
@@ -717,7 +800,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
    * attachment renders per ITS type. The timestamp only sits on the media when
    * there is no caption to carry it.
    */
-  function renderMediaSection() {
+  /**
+   * The media half of a bubble. `showTime` defaults to "there is no caption to
+   * carry the stamp"; a poll passes false because the poll card renders its own.
+   */
+  function renderMediaSection(showTime = !hasText) {
     if (!hasMedia) return null;
 
     if (isAlbum) {
@@ -729,7 +816,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             onDocumentClick={downloadAlbumItem}
             isSelectionMode={isSelectionMode}
           />
-          {!hasText && (
+          {showTime && (
             <TimeOverlay
               time={message.created}
               isSender={isSender}
@@ -746,7 +833,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       return (
         <div className="px-3.5 pt-[9px] pb-1">
           {renderDocument(mediaName)}
-          {!hasText && (
+          {showTime && (
             <BubbleTimestamp
               time={message.created}
               isSender={isSender}
@@ -762,7 +849,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       return (
         <div className="relative m-[5px]">
           {renderVideo(mediaPath)}
-          {!hasText && (
+          {showTime && (
             <TimeOverlay
               time={message.created}
               isSender={isSender}
@@ -777,7 +864,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       <>
         <div className="relative m-[5px] overflow-hidden rounded-xl">
           {renderImage(mediaPath)}
-          {!hasText && !imgError && (
+          {showTime && !imgError && (
             <TimeOverlay
               time={message.created}
               isSender={isSender}
@@ -787,7 +874,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         </div>
         {/* A broken image shows a fallback tile — the overlay would be unreadable
             on it, so the timestamp moves below instead of disappearing. */}
-        {!hasText && imgError && (
+        {showTime && imgError && (
           <div className="px-3.5 pb-1">
             <BubbleTimestamp
               time={message.created}
@@ -864,6 +951,60 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         onScrollToMessage={onScrollToMessage}
       />
     );
+
+    // ── Poll ──
+    // The bubble is the poll: no caption, no media, no link cards. `messageText`
+    // equals the question, so the chat preview, reply quote, pinned list and
+    // search results already read sensibly with no poll-specific code.
+    if (poll) {
+      return (
+        <div
+          className={cn(
+            "overflow-hidden rounded-2xl",
+            isSender
+              ? "rounded-tr-[4px] bubble-sent"
+              : "rounded-tl-[4px] bubble-recv",
+            isSelected && "ring-2 ring-primary/40",
+            isSelectionMode && "cursor-pointer"
+          )}
+          onClick={isSelectionMode ? () => onSelect(message) : undefined}
+        >
+          {replyPreview}
+          {message.forwardFromMessageId && (
+            <div className="px-3.5 pb-0 pt-[9px]">{forwardedLabel}</div>
+          )}
+          {/* A poll's question can carry attachments. They live on the MESSAGE,
+              not inside `poll`, and render with the same album/lightbox as an
+              image message — routing on `messageType` alone would drop them,
+              because a poll with images is still `messageType: "POLL"`. The
+              stamp is suppressed here; the poll card carries its own. */}
+          {hasMedia && (
+            <div className="w-[min(320px,80vw)] px-[7px] pt-[7px]">
+              {renderMediaSection(false)}
+            </div>
+          )}
+          <PollBubble
+            messageId={message.messageId}
+            poll={poll}
+            isSender={isSender}
+            // Voting needs a live tally to answer with; `isSelectionMode`
+            // already means "the options are not clickable here".
+            isSelectionMode={isSelectionMode || readOnly}
+            onVote={onVotePoll}
+            onRequestClosePoll={() => setClosePollOpen(true)}
+            closing={closingPoll}
+            onOpenVoters={openVoters}
+            timestamp={
+              <BubbleTimestamp
+                time={message.created}
+                isSender={isSender}
+                isReadByAll={message.isReadByAll}
+              />
+            }
+          />
+        </div>
+      );
+    }
 
     // Standalone image (no reply, image not broken)
     if (isStandaloneImage && !message.forwardFromMessageId && mediaPath) {
@@ -1033,7 +1174,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       {/* Bubble column — only this part triggers the context menu */}
       <ContextMenu>
         <ContextMenuTrigger asChild disabled={isSelectionMode || message.isDeleted}>
-          <div className="group relative min-w-0 max-w-[55%]">
+          <div
+            className={cn(
+              "group relative min-w-0",
+              // A poll needs a definite, wider column than a text bubble: its
+              // rows are fixed-width and `55%` of a narrow phone would clip them.
+              poll
+                ? "max-w-[min(356px,84vw)]"
+                : bubbleMaxWidthClass || "max-w-[55%]"
+            )}
+          >
             {/* Bubble + sender name — w-fit so only bubble content sets width */}
             <div className={cn(
               "w-fit min-w-0",
@@ -1051,7 +1201,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 {renderBubbleContent()}
 
                 {/* Add reaction button at bottom corner — show on hover OR when bar is open */}
-                {!message.reactions?.length && !isSelectionMode && !message.isDeleted && (
+                {!message.reactions?.length && !isSelectionMode && !readOnly && !message.isDeleted && (
                   <div className={cn(
                     "absolute -bottom-2.5 z-[2] opacity-0 transition-opacity group-hover:opacity-100",
                     reactionBarOpen && "opacity-100",
@@ -1078,10 +1228,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   reactions={message.reactions}
                   isSender={isSender}
                   currentUserId={chatuserId}
-                  onReactionClick={(emoji) => onToggleReaction(message.messageId, emoji)}
+                  onReactionClick={(emoji) =>
+                    readOnly
+                      ? setReactionDetailOpen(true)
+                      : onToggleReaction(message.messageId, emoji)
+                  }
                   onShowDetails={() => setReactionDetailOpen(true)}
                 />
-                {!isSelectionMode && (
+                {!isSelectionMode && !readOnly && (
                   <QuickReactionsBar
                     isSender={isSender}
                     onQuickReaction={(emoji) => onToggleReaction(message.messageId, emoji)}
@@ -1094,6 +1248,38 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         </ContextMenuTrigger>
         {contextMenuContent}
       </ContextMenu>
+
+      {/* Poll voters dialog */}
+      {poll && (
+        <PollVotersDialog
+          open={votersOpen}
+          onOpenChange={setVotersOpen}
+          messageId={message.messageId}
+          poll={poll}
+          initialOptionId={votersOptionId}
+        />
+      )}
+
+      {/* Close-poll confirmation */}
+      {poll && (
+        <AlertDialog open={closePollOpen} onOpenChange={setClosePollOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Close this poll?</AlertDialogTitle>
+              <AlertDialogDescription>
+                No one will be able to vote after this, and a poll can't be
+                reopened.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmClosePoll}>
+                Close poll
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
 
       {/* Reaction details dialog */}
       <ReactionDetailsDialog
@@ -1148,10 +1334,14 @@ function areEqual(
     prev.isSender === next.isSender &&
     prev.isSelected === next.isSelected &&
     prev.isSelectionMode === next.isSelectionMode &&
+    prev.readOnly === next.readOnly &&
     prev.showSenderInfo === next.showSenderInfo &&
     prev.message.reactions === next.message.reactions &&
     prev.message.isPinned === next.message.isPinned &&
-    prev.message.isDeleted === next.message.isDeleted
+    prev.message.isDeleted === next.message.isDeleted &&
+    // The poll object is REPLACED wholesale on every update, so identity is the
+    // right test — without it a vote never repaints the bars.
+    prev.message.poll === next.message.poll
   );
 }
 

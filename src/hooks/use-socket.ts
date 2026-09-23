@@ -16,6 +16,10 @@ interface UseTalkSocketOptions {
   onPresenceChanged?: (data: any) => void;
   onReactionToggled?: (data: any) => void;
   onPinToggled?: (data: any) => void;
+  // The ONE poll broadcast — `{ talkId, messageId, poll }`. There is no
+  // `pollVoted` and no `pollClosed`; every change comes through here, and the
+  // payload is always the complete tally.
+  onPollUpdated?: (data: any) => void;
   onUserTyping?: (data: any) => void;
   onUserStopTyping?: (data: any) => void;
   // Fired when the backend finishes converting an upload (e.g. HEIC → PNG)
@@ -36,6 +40,7 @@ export function useTalkSocket({
   onPresenceChanged,
   onReactionToggled,
   onPinToggled,
+  onPollUpdated,
   onUserTyping,
   onUserStopTyping,
   onMediaConverted,
@@ -60,6 +65,8 @@ export function useTalkSocket({
   onReactionToggledRef.current = onReactionToggled;
   const onPinToggledRef = useRef(onPinToggled);
   onPinToggledRef.current = onPinToggled;
+  const onPollUpdatedRef = useRef(onPollUpdated);
+  onPollUpdatedRef.current = onPollUpdated;
   const onUserTypingRef = useRef(onUserTyping);
   onUserTypingRef.current = onUserTyping;
   const onUserStopTypingRef = useRef(onUserStopTyping);
@@ -118,6 +125,7 @@ export function useTalkSocket({
     socket.on("presenceChanged", (data) => onPresenceChangedRef.current?.(data));
     socket.on("reactionToggled", (data) => onReactionToggledRef.current?.(data));
     socket.on("pinToggled", (data) => onPinToggledRef.current?.(data));
+    socket.on("pollUpdated", (data) => onPollUpdatedRef.current?.(data));
     socket.on("userTyping", (data) => onUserTypingRef.current?.(data));
     socket.on("userStopTyping", (data) => onUserStopTypingRef.current?.(data));
     socket.on("mediaConverted", (data) => onMediaConvertedRef.current?.(data));

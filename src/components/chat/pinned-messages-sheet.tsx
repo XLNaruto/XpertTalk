@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Pin, FileText, Image, Video, Loader2 } from "lucide-react";
+import { Pin, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { apiHeader, getData } from "@/lib/api-helper";
 import { getEncodedCookie } from "@/lib/encryption";
-import { formatPreview } from "@/lib/message-formatters";
-import { previewLabel } from "@/lib/media-items";
-import { cn } from "@/lib/utils";
+import MessageBubble from "@/components/chat/message-bubble";
 import { UserAvatar } from "@/components/shared/user-avatar";
+import { cn } from "@/lib/utils";
 import {
   Sheet,
   SheetContent,
@@ -16,18 +15,53 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import logger from "@/lib/logger";
 
+/**
+ * Clicks the bubble itself owns — a link, a media tile, a document chip, a link
+ * card, a poll row, any button. The row-level "jump to message" must not fire
+ * on top of them. `.cursor-pointer` is the honest test: everything clickable in
+ * a bubble carries it (the row's own class is excluded at the call site).
+ *
+ * Only used by the jump-to-message click, which is parked — see below.
+ */
+// const INTERACTIVE =
+//   'a, button, video, [role="button"], .media-plate, .cursor-pointer';
+
 interface PinnedMessagesSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   talkId: string;
+  /** Parked: the row-click jump is commented out for now. */
   onMessageClick: (messageId: string) => void;
+  onReply: (message: any) => void;
+  onEdit: (message: any) => void;
+  onDelete: (messageId: string) => void;
+  onForward: (message: any) => void;
+  onEnterSelectionMode: (message: any) => void;
+  onMediaClick: (
+    mediaPath: string,
+    mediaType: "image" | "video",
+    messageId?: string,
+    mediaId?: string
+  ) => void;
+  onTogglePin: (messageId: string) => void;
+  onMarkUnread: (message: any) => void;
+  onClosePoll: (messageId: string) => Promise<void>;
 }
 
 export function PinnedMessagesSheet({
   open,
   onOpenChange,
   talkId,
-  onMessageClick,
+  // onMessageClick, — parked with the jump-to-message click below.
+  onReply,
+  onEdit,
+  onDelete,
+  onForward,
+  onEnterSelectionMode,
+  onMediaClick,
+  onTogglePin,
+  onMarkUnread,
+  onClosePoll,
 }: PinnedMessagesSheetProps) {
   const chatuserId = getEncodedCookie("chatuserId") || "";
   const [messages, setMessages] = useState<any[]>([]);
@@ -81,36 +115,52 @@ export function PinnedMessagesSheet({
     }
   }, [open, talkId, fetchPinnedMessages]);
 
-  const handleMessageClick = (messageId: string) => {
+  // Clicking a pinned row used to close the sheet and scroll the conversation
+  // to that message. Parked for now — the rows are read here, not navigated
+  // from. Restore this, the `INTERACTIVE` guard and the row handlers together.
+  // const handleMessageClick = (messageId: string) => {
+  //   onOpenChange(false);
+  //   setTimeout(() => onMessageClick(messageId), 300);
+  // };
+
+  /**
+   * Anything that hands the user back to the conversation — composing a reply,
+   * an edit, a forward, the lightbox — closes the sheet first. The sheet is a
+   * modal overlay: a lightbox opened underneath it would be unclickable.
+   */
+  const closeThen = (fn: () => void) => {
     onOpenChange(false);
-    setTimeout(() => onMessageClick(messageId), 300);
+    setTimeout(fn, 300);
   };
 
-  const getEffectiveType = (msg: any) => {
-    if (msg.forwardFromMessageId && msg.forwardMessage) {
-      return msg.forwardMessage.messageType || msg.messageType;
-    }
-    return msg.messageType;
+  /** Drop a row whose message is no longer pinned (or no longer exists). */
+  const dropMessage = (messageId: string) =>
+    setMessages((prev) => prev.filter((m) => m.messageId !== messageId));
+
+  const handleTogglePin = (messageId: string) => {
+    // Every message here IS pinned, so this is always an unpin — take the row
+    // out at once rather than leaving a pinned list showing unpinned messages.
+    onTogglePin(messageId);
+    dropMessage(messageId);
   };
 
-  // Caption first, then a media description ("3 photos" for an album). A media
-  // message can carry text, so this can't be decided from `messageType`.
-  const getMessagePreview = (msg: any) => previewLabel(msg);
+  const handleDelete = (messageId: string) => {
+    onDelete(messageId);
+    dropMessage(messageId);
+  };
 
-  const getMessageIcon = (msg: any) => {
-    const type = getEffectiveType(msg);
-    if (type === "IMAGE")
-      return <Image className="h-4 w-4 text-primary/60" />;
-    if (type === "VIDEO")
-      return <Video className="h-4 w-4 text-primary/60" />;
-    if (type === "DOCUMENT")
-      return <FileText className="h-4 w-4 text-primary/60" />;
-    return null;
+  const handleClosePoll = async (messageId: string) => {
+    await onClosePoll(messageId);
+    // The sheet holds its own copy of the poll and gets no broadcasts, so the
+    // closed state only shows up on a re-read.
+    fetchPinnedMessages();
   };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-105 flex-col gap-0 overflow-hidden p-0 sm:max-w-105">
+      {/* Wider than the other sheets: these are FULL bubbles — media, polls and
+          link cards — not one-line previews. */}
+      <SheetContent className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:w-140 sm:max-w-140">
         <SheetHeader className="border-b border-border/50 px-4 py-4">
           <SheetTitle className="flex items-center gap-2 text-base">
             <Pin className="h-4 w-4 text-primary" />
@@ -138,44 +188,89 @@ export function PinnedMessagesSheet({
               </div>
             </div>
           ) : (
-            <div className="py-2">
-              {messages.map((msg) => (
-                <button
-                  key={msg.messageId}
-                  className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-primary/5"
-                  onClick={() => handleMessageClick(msg.messageId)}
-                >
-                  <UserAvatar
-                    src={msg.senderProfile}
-                    name={msg.senderName}
-                    size="sm"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-[12px] font-semibold text-primary">
-                        {String(msg.senderChatuserId) === String(chatuserId) ? "You" : msg.senderName}
-                      </p>
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        {format(new Date(msg.pinnedAt || msg.created), "MMM d, h:mm a")}
+            <div className="flex flex-col gap-1 py-2">
+              {messages.map((msg) => {
+                const isSender =
+                  String(msg.senderChatuserId) === String(chatuserId);
+                return (
+                  <div
+                    key={msg.messageId}
+                    className="px-3 py-2"
+                    // Jump-to-message — parked, see `handleMessageClick`.
+                    // role="button"
+                    // tabIndex={0}
+                    // onClick={(e) => {
+                    //   // A click the bubble owns (link, media, poll row, menu
+                    //   // item) is that element's — jumping too would fire both.
+                    //   const hit = (e.target as HTMLElement).closest(INTERACTIVE);
+                    //   if (hit && hit !== e.currentTarget) return;
+                    //   handleMessageClick(msg.messageId);
+                    // }}
+                  >
+                    {/* Sender and pin time share ONE row, above the bubble —
+                        inside it they would widen a short bubble to fit. */}
+                    <div
+                      className={cn(
+                        "mb-1 flex items-center gap-2.5",
+                        isSender && "justify-end"
+                      )}
+                    >
+                      {!isSender && (
+                        <>
+                          <UserAvatar
+                            src={msg.senderProfile}
+                            name={msg.senderName}
+                            size="default"
+                          />
+                          <span className="min-w-0 truncate text-[11.5px] font-bold tracking-wide text-primary">
+                            {msg.senderName}
+                          </span>
+                        </>
+                      )}
+                      <span className="shrink-0 text-[10px] font-medium text-muted-foreground">
+                        Pinned{" "}
+                        {format(
+                          new Date(msg.pinnedAt || msg.created),
+                          "MMM d, h:mm a"
+                        )}
                       </span>
                     </div>
-                    <div className="mt-0.5 flex items-center gap-1.5">
-                      {getMessageIcon(msg)}
-                      <p
-                        className={cn(
-                          "truncate text-[13px] leading-snug",
-                          msg.messageType === "TEXT"
-                            ? "text-foreground/80"
-                            : "text-muted-foreground"
-                        )}
-                        dangerouslySetInnerHTML={{
-                          __html: formatPreview(getMessagePreview(msg)),
-                        }}
+
+                    {/* `readOnly` keeps reading whole — links, lightbox,
+                        downloads, the right-click menu — and only drops the
+                        controls whose result this sheet could not show back
+                        (reacting, voting), since it gets no live updates. */}
+                    <MessageBubble
+                        message={msg}
+                        isSender={isSender}
+                        showSenderInfo={false}
+                        isSelected={false}
+                        isSelectionMode={false}
+                        readOnly
+                        bubbleMaxWidthClass="max-w-[85%]"
+                        onReply={(m) => closeThen(() => onReply(m))}
+                        onEdit={(m) => closeThen(() => onEdit(m))}
+                        onDelete={handleDelete}
+                        onSelect={(m) => closeThen(() => onEnterSelectionMode(m))}
+                        onEnterSelectionMode={(m) =>
+                          closeThen(() => onEnterSelectionMode(m))
+                        }
+                        onForward={(m) => closeThen(() => onForward(m))}
+                        onMediaClick={(path, type, messageId, mediaId) =>
+                          closeThen(() =>
+                            onMediaClick(path, type, messageId, mediaId)
+                          )
+                        }
+                        // onScrollToMessage={handleMessageClick}
+                        onToggleReaction={() => {}}
+                        onTogglePin={handleTogglePin}
+                        onMarkUnread={(m) => closeThen(() => onMarkUnread(m))}
+                        onVotePoll={() => {}}
+                        onClosePoll={handleClosePoll}
                       />
-                    </div>
                   </div>
-                </button>
-              ))}
+                );
+              })}
 
               {/* Load more */}
               {hasMore && nextCursor && (

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { X, FileText, Image as ImageIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 // Browsers (except Safari) can't render HEIC/HEIF in an <img>, so an object URL
 // for one just yields a broken thumbnail. The backend converts these on upload;
@@ -19,17 +20,25 @@ interface FilePreviewProps {
   files: File[];
   onRemove: (index: number) => void;
   isImage: (file: File) => boolean;
+  /** Overrides the strip's own padding — the composer and a dialog differ. */
+  className?: string;
 }
 
 export const FilePreview = React.memo(function FilePreview({
   files,
   onRemove,
   isImage,
+  className,
 }: FilePreviewProps) {
   if (files.length === 0) return null;
 
   return (
-    <div className="flex max-h-50 flex-wrap gap-2 overflow-y-auto px-4 pb-2 pt-3">
+    <div
+      className={cn(
+        "flex max-h-50 flex-wrap gap-2 overflow-y-auto px-4 pb-2 pt-3",
+        className
+      )}
+    >
       {files.map((file, index) => (
         <FilePreviewItem
           key={`${file.name}-${index}`}

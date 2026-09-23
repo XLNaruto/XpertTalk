@@ -16,6 +16,22 @@ interface Reaction {
   reaction: string;
 }
 
+/** The tally on a chip — a pill of its own, so it reads apart from the label. */
+function ChipCount({ value, active }: { value: number; active: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+        active
+          ? "bg-primary text-white"
+          : "bg-foreground/[0.08] text-muted-foreground"
+      )}
+    >
+      {value}
+    </span>
+  );
+}
+
 interface ReactionDetailsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -57,27 +73,28 @@ export function ReactionDetailsDialog({
           <button
             onClick={() => setActiveTab("all")}
             className={cn(
-              "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer",
+              "inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full py-1.5 pl-3 pr-1.5 text-xs font-medium transition-colors",
               activeTab === "all"
                 ? "bg-primary/15 text-primary"
                 : "text-muted-foreground hover:bg-muted/60"
             )}
           >
-            All {reactions.length}
+            All
+            <ChipCount value={reactions.length} active={activeTab === "all"} />
           </button>
           {tabs.map(({ emoji, count }) => (
             <button
               key={emoji}
               onClick={() => setActiveTab(emoji)}
               className={cn(
-                "shrink-0 inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer",
+                "inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full py-1.5 pl-2.5 pr-1.5 text-xs font-medium transition-colors",
                 activeTab === emoji
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground hover:bg-muted/60"
               )}
             >
               <span className="text-sm">{emoji}</span>
-              <span>{count}</span>
+              <ChipCount value={count} active={activeTab === emoji} />
             </button>
           ))}
         </div>

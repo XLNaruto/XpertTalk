@@ -2,6 +2,12 @@ import { create } from 'zustand';
 import { format, subDays, isAfter } from 'date-fns';
 import { apiHeader, getData } from '@/lib/api-helper';
 import logger from '@/lib/logger';
+import {
+  applySelectionLocally,
+  mergePoll,
+  myVotesOf,
+  type Poll,
+} from '@/lib/polls';
 
 const MAX_CACHED_CHATS = 10;
 const MAX_CACHED_MESSAGES = 100;
@@ -41,6 +47,7 @@ interface MessageCacheStore {
     limit?: number | string
   ) => Promise<void>;
   dispatchMessage: (action: MessageAction) => void;
+  refreshPolls: (talkId: string) => Promise<void>;
   clearChat: (talkId: string) => void;
   clearAll: () => void;
 }
@@ -56,7 +63,13 @@ type MessageAction =
   | { type: 'MARK_UNREAD'; payload: { messageId: string } }
   | { type: 'TOGGLE_REACTION'; payload: { messageId: string; chatuserId: string; userName: string; userProfile?: string; reaction: string } }
   | { type: 'TOGGLE_PIN'; payload: { messageId: string; isPinned: boolean } }
-  | { type: 'UPDATE_MEDIA'; payload: { messageId?: string; mediaId?: string; mediaPath: string; mediaName?: string } };
+  | { type: 'UPDATE_MEDIA'; payload: { messageId?: string; mediaId?: string; mediaPath: string; mediaName?: string } }
+  // `addressed` = the payload was sent to THIS user (message list, or our own
+  // ack) and so carries a trustworthy `myVotes`/`canClose`. A `pollUpdated`
+  // broadcast is not addressed.
+  | { type: 'APPLY_POLL'; payload: { messageId: string; poll: Poll; addressed?: boolean } }
+  | { type: 'SET_POLL_SELECTION'; payload: { messageId: string; optionIds: string[] } }
+  | { type: 'MARK_POLL_CLOSED'; payload: { messageId: string } };
 
 const START_INDEX = 1_000_000;
 // userStage removed — endpoints now use common prefix
@@ -123,9 +136,23 @@ function applyMessageAction(messages: any[], action: MessageAction): any[] {
     case 'SET_MESSAGES': return action.payload;
     case 'PREPEND_MESSAGES': return [...action.payload, ...messages];
     case 'APPEND_MESSAGES': return [...messages, ...action.payload];
-    case 'ADD_MESSAGE':
-      return messages.some(m => m.messageId === action.payload.messageId)
-        ? messages : [...messages, action.payload];
+    case 'ADD_MESSAGE': {
+      // `clientMsgId` is the create-side idempotency key (polls send one). The
+      // server echoes it on the broadcast, so a row already added from the ack
+      // is adopted rather than appended a second time.
+      const incoming = action.payload;
+      const existing = messages.findIndex(m =>
+        m.messageId === incoming.messageId ||
+        (incoming.clientMsgId && m.clientMsgId === incoming.clientMsgId));
+      if (existing < 0) return [...messages, incoming];
+      // Same message arriving again — keep whatever the addressed copy told us
+      // about ourselves (`poll.myVotes`, `poll.canClose`); a broadcast omits both.
+      const held = messages[existing];
+      if (!held.poll || !incoming.poll) return messages;
+      const poll = mergePoll(held.poll, incoming.poll, false);
+      if (poll === held.poll) return messages;
+      return messages.map((m, i) => (i === existing ? { ...m, ...incoming, poll } : m));
+    }
     case 'EDIT_MESSAGE':
       return messages.map(m =>
         m.messageId === action.payload.messageId
@@ -199,6 +226,37 @@ function applyMessageAction(messages: any[], action: MessageAction): any[] {
         m.messageId === messageId ? { ...m, isPinned } : m
       );
     }
+    case 'APPLY_POLL': {
+      const { messageId, poll, addressed } = action.payload;
+      // A `pollUpdated` for a message we do not hold is normal — the talk is not
+      // open, or the message has not loaded yet. Ignore it; never fetch.
+      const idx = messages.findIndex(m => m.messageId === messageId);
+      if (idx < 0) return messages;
+      const merged = mergePoll(messages[idx].poll, poll, !!addressed);
+      // Stale (revision ≤ the one held) — `mergePoll` hands back the same object.
+      if (merged === messages[idx].poll) return messages;
+      return messages.map((m, i) => (i === idx ? { ...m, poll: merged } : m));
+    }
+    case 'SET_POLL_SELECTION': {
+      // Optimistic: the user's complete selection plus the count adjustments
+      // that keep the bars from jumping when the real payload lands.
+      const { messageId, optionIds } = action.payload;
+      const idx = messages.findIndex(m => m.messageId === messageId);
+      if (idx < 0 || !messages[idx].poll) return messages;
+      const held: Poll = messages[idx].poll;
+      const before = myVotesOf(held);
+      if (before.length === optionIds.length &&
+          before.every(id => optionIds.includes(id))) return messages;
+      return messages.map((m, i) =>
+        i === idx ? { ...m, poll: applySelectionLocally(held, optionIds) } : m);
+    }
+    case 'MARK_POLL_CLOSED': {
+      const idx = messages.findIndex(m => m.messageId === action.payload.messageId);
+      if (idx < 0 || !messages[idx].poll) return messages;
+      if (messages[idx].poll.isClosed) return messages;
+      return messages.map((m, i) =>
+        i === idx ? { ...m, poll: { ...m.poll, isClosed: true } } : m);
+    }
     default: return messages;
   }
 }
@@ -246,6 +304,12 @@ function syncMessages(cached: any[], fresh: any[]): any[] {
     // Check if EDITED — compare updated timestamps
     if (freshVersion.updated && msg.updated !== freshVersion.updated) {
       result.push(freshVersion); // Use the fresh (edited) version
+    } else if (freshVersion.poll) {
+      // A vote changes the poll without touching the message's `updated`, so an
+      // otherwise-unchanged row still needs the fresh tally. The list is
+      // addressed to us, so it carries `myVotes` and `canClose` too.
+      const poll = mergePoll(msg.poll, freshVersion.poll, true);
+      result.push(poll === msg.poll ? msg : { ...msg, poll });
     } else {
       result.push(msg); // Keep cached version (unchanged)
     }
@@ -577,6 +641,40 @@ export const useMessageCacheStore = create<MessageCacheStore>((set, get) => ({
         },
       },
     }));
+  },
+
+  /**
+   * Re-read every poll in the open talk from the message list.
+   *
+   * Used after a socket reconnect: `pollUpdated` broadcasts sent during the gap
+   * are simply gone, and the newer-messages catch-up only appends rows — it
+   * never refreshes a poll that was already on screen. The list is addressed to
+   * this user, so it restores `myVotes` and `canClose` as well as the tally,
+   * and it touches only the `poll` field so the scroll anchor is left alone.
+   */
+  refreshPolls: async (talkId: string) => {
+    if (!talkId) return;
+    const hasPolls = get().messages.some((m: any) => m.poll);
+    if (!hasPolls) return;
+    try {
+      const response: any = await getData(
+        'chat/message/list',
+        { talkId, fromMessageId: '', direction: '', limit: -1 },
+        apiHeader(false, 0)
+      );
+      if (String(response?.data?.status) !== '200') return;
+      if (get().activeTalkId !== talkId) return;
+      const fresh: any[] = Array.isArray(response.data.data) ? response.data.data : [];
+      for (const msg of fresh) {
+        if (!msg?.poll || !msg?.messageId) continue;
+        get().dispatchMessage({
+          type: 'APPLY_POLL',
+          payload: { messageId: msg.messageId, poll: msg.poll, addressed: true },
+        });
+      }
+    } catch (err) {
+      logger.error('refreshPolls failed:', err);
+    }
   },
 
   clearChat: (talkId) => {

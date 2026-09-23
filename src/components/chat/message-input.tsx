@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Paperclip, SendHorizonal, X, Reply, Pencil } from "lucide-react";
+import { BarChart3, Paperclip, SendHorizonal, X, Reply, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMessageWithMentions, formatPreview } from "@/lib/message-formatters";
 import useFileUpload from "@/hooks/use-file-upload";
@@ -47,6 +47,8 @@ export interface MessageInputProps {
   talkType: string;
   onDraftLoaded?: (draft: DraftState | null) => void;
   onFileDragChange?: (isDragging: boolean) => void;
+  /** Opens the poll composer. Omitted → the attach menu only offers files. */
+  onCreatePoll?: () => void;
 }
 
 export interface MessageInputHandle {
@@ -134,6 +136,7 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
       talkType,
       onDraftLoaded,
       onFileDragChange,
+      onCreatePoll,
     },
     ref
   ) => {
@@ -725,11 +728,27 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
               style={{ overflowY: "hidden" }}
             />
 
+            {/* Poll — its own control, next to Attach. Hidden while editing:
+                the server rejects poll edits, so it would go nowhere. */}
+            {onCreatePoll && !isEditing && (
+              <button
+                type="button"
+                onClick={onCreatePoll}
+                aria-label="Create poll"
+                title="Create poll"
+                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+              >
+                <BarChart3 className="h-5 w-5" />
+              </button>
+            )}
+
             {/* Attach button */}
             <button
               type="button"
               onClick={openFilePicker}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+              aria-label="Attach files"
+              title="Attach files"
+              className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
             >
               <Paperclip className="h-5 w-5" />
             </button>

@@ -26,6 +26,8 @@ import { DragOverlay } from "@/components/chat/drag-overlay";
 import { ForwardDialog } from "@/components/modals/forward-dialog";
 import { PinnedMessagesSheet } from "@/components/chat/pinned-messages-sheet";
 import { MediaListSheet } from "@/components/chat/media-list-sheet";
+import { PollComposeDialog } from "@/components/chat/poll-compose-dialog";
+import { usePolls } from "@/hooks/use-polls";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -71,6 +73,7 @@ export function ChatArea() {
   const formattedMessages = useMessageCacheStore((s) => s.formattedMessages);
   const dispatchMessage = useMessageCacheStore((s) => s.dispatchMessage);
   const switchChat = useMessageCacheStore((s) => s.switchChat);
+  const refreshPolls = useMessageCacheStore((s) => s.refreshPolls);
   // UI store
   const handleCreateGroupClose = useUIStore((s) => s.handleCreateGroupClose);
   // User list store (sidebar)
@@ -108,6 +111,7 @@ export function ChatArea() {
   const [selectionDeleteOpen, setSelectionDeleteOpen] = useState(false);
   const [isPinnedSheetOpen, setIsPinnedSheetOpen] = useState(false);
   const [isMediaListOpen, setIsMediaListOpen] = useState(false);
+  const [isPollComposeOpen, setIsPollComposeOpen] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Map<string, string>>(new Map());
   const typingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -144,6 +148,7 @@ export function ChatArea() {
     enterSelectionModeMultiple,
     cancelSelection,
     canDeleteSelected,
+    canForwardSelected,
   } = useMessageSelection({ talkId, chatuserId });
 
   const {
@@ -172,6 +177,12 @@ export function ChatArea() {
         if (lastMsg?.messageId) {
           getMessagesList(talkId, lastMsg.messageId, "newer", -1);
         }
+        // The catch-up above only APPENDS — a `pollUpdated` missed during the
+        // gap would leave an on-screen poll stale, so re-read the polls too.
+        // The list is addressed to us, so `myVotes` and `canClose` come back
+        // with it. Any vote backoff is reset: the reason for it has gone.
+        refreshPolls(talkId);
+        resetPollBackoff();
       }
       // Deliberately NO markRead here. Reading is a consequence of the user
       // actually seeing messages (MessageList marks the newest visible unread),
@@ -268,6 +279,17 @@ export function ChatArea() {
       if (!converted) return;
       dispatchMessage({ type: "UPDATE_MEDIA", payload: converted });
     },
+    onPollUpdated: (data) => {
+      // The ONE poll broadcast. `dispatchMessage` drops it when the revision is
+      // ≤ the one held and when the message is not in the list (the talk isn't
+      // open, or it hasn't loaded) — never fetch on either. `addressed` is false:
+      // a broadcast has no single viewer, so it carries no `myVotes`/`canClose`.
+      if (!data?.messageId || !data?.poll) return;
+      dispatchMessage({
+        type: "APPLY_POLL",
+        payload: { messageId: data.messageId, poll: data.poll },
+      });
+    },
     onPinToggled: (data) => {
       dispatchMessage({
         type: "TOGGLE_PIN",
@@ -278,6 +300,12 @@ export function ChatArea() {
       });
     },
   });
+
+  // ── Polls ──
+  // Declared after the socket because it needs `emit`; `onConnect` only reads
+  // `resetPollBackoff` when the socket actually reconnects, long after this line.
+  const { vote: handleVotePoll, closePoll: handleClosePoll, resetPollBackoff } =
+    usePolls({ emit, talkId });
 
   // ── Read messages API ──
 
@@ -958,6 +986,7 @@ export function ChatArea() {
         isSelectionMode={isSelectionMode}
         selectedCount={selectedMessages.length}
         canDeleteSelected={canDeleteSelected}
+        canForwardSelected={canForwardSelected}
         onBackClick={handleBack}
         onProfileClick={() => setIsGroupSheetOpen(true)}
         onCancelSelection={cancelSelection}
@@ -1010,6 +1039,8 @@ export function ChatArea() {
           onToggleReaction={handleToggleReaction}
           onTogglePin={handleTogglePin}
           onMarkUnread={handleMarkUnread}
+          onVotePoll={handleVotePoll}
+          onClosePoll={handleClosePoll}
         />
         <DragOverlay isVisible={isFileDragging} />
       </div>
@@ -1057,6 +1088,7 @@ export function ChatArea() {
         talkType={talkType}
         onDraftLoaded={handleDraftLoaded}
         onFileDragChange={setIsFileDragging}
+        onCreatePoll={() => setIsPollComposeOpen(true)}
       />
 
       {/* Group management sheet */}
@@ -1110,6 +1142,15 @@ export function ChatArea() {
         onMessageClick={(messageId) => {
           messageListRef.current?.scrollToMessage(messageId);
         }}
+        onReply={handleReply}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        onForward={handleForward}
+        onEnterSelectionMode={handleEnterSelection}
+        onMediaClick={handleMediaClickCb}
+        onTogglePin={handleTogglePin}
+        onMarkUnread={handleMarkUnread}
+        onClosePoll={handleClosePoll}
       />
 
       {/* Media list sheet */}
@@ -1118,6 +1159,16 @@ export function ChatArea() {
         onOpenChange={setIsMediaListOpen}
         talkId={talkId}
         onMediaClick={handleMediaClickFromList}
+      />
+
+      {/* Poll compose */}
+      <PollComposeDialog
+        open={isPollComposeOpen}
+        onOpenChange={setIsPollComposeOpen}
+        emit={emit}
+        isConnected={isConnected}
+        replyToMessageId={replyMessageId}
+        onSent={cancelReply}
       />
 
       {/* Forward dialog */}
