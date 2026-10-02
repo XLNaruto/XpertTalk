@@ -75,7 +75,9 @@ export function TimePicker({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    // `modal` gives the popover its own scroll lock; without it a parent Dialog's
+    // lock swallows wheel events in the portaled columns.
+    <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
         <button
           id={id}

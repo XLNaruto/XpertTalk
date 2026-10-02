@@ -40,6 +40,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Hint } from "@/components/ui/tooltip";
 
 interface EventDetailsProps {
   event: EventRecord | null;
@@ -127,15 +128,16 @@ export function EventDetails({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b border-border bg-popover px-4 py-3 pr-12">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title="Back to events"
-          aria-label="Back to events"
-          onClick={onBack}
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+        <Hint label="Back to events">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Back to events"
+            onClick={onBack}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </Hint>
         <span className="text-sm font-semibold">Event details</span>
         {loading && (
           <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -223,16 +225,17 @@ export function EventDetails({
                       {displayName(p)}
                     </span>
                     {canManage && (
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        title={`Remove ${displayName(p)}`}
-                        aria-label={`Remove ${displayName(p)}`}
-                        disabled={busy}
-                        onClick={() => setPendingRemove(p)}
-                      >
-                        <UserMinus className="h-3 w-3" />
-                      </Button>
+                      <Hint label={`Remove ${displayName(p)}`}>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Remove ${displayName(p)}`}
+                          disabled={busy}
+                          onClick={() => setPendingRemove(p)}
+                        >
+                          <UserMinus className="h-3 w-3" />
+                        </Button>
+                      </Hint>
                     )}
                   </div>
                 ))}

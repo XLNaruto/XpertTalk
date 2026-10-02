@@ -5,6 +5,7 @@ import { UserAvatar } from "@/components/shared/user-avatar";
 import { cn } from "@/lib/utils";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { MuteDialog } from "@/components/chat/mute-dialog";
+import { Hint } from "@/components/ui/tooltip";
 
 interface ChatHeaderProps {
   receiverName: string;
@@ -154,9 +155,11 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
               <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-foreground">
                 <span className="truncate">{displayName}</span>
                 {isMuted && (
-                  <span title={muteLabel || "Muted"} className="shrink-0">
-                    <BellOff className="h-3.5 w-3.5 text-muted-foreground/60" />
-                  </span>
+                  <Hint label={muteLabel || "Muted"}>
+                    <span className="shrink-0">
+                      <BellOff className="h-3.5 w-3.5 text-muted-foreground/60" />
+                    </span>
+                  </Hint>
                 )}
               </p>
               {isPrivate && (
@@ -185,62 +188,72 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
         <div className="flex items-center gap-2">
           {!isSelectionMode && (
             <>
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Search Messages"
-                className="rounded-lg hover:bg-primary/10 hover:text-primary"
-                onClick={onSearchOpen}
-              >
-                <Search className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Media & Documents"
-                className="rounded-lg hover:bg-primary/10 hover:text-primary"
-                onClick={onMediaListClick}
-              >
-                <Image className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Pinned Messages"
-                className="rounded-lg hover:bg-primary/10 hover:text-primary"
-                onClick={onPinnedClick}
-              >
-                <Pin className="h-4 w-4" />
-              </Button>
-              {onToggleMute && (
+              <Hint label="Search Messages">
                 <Button
+                  aria-label="Search Messages"
                   variant="ghost"
                   size="icon"
-                  title={isMuted ? muteLabel || "Muted" : "Mute notifications"}
                   className="rounded-lg hover:bg-primary/10 hover:text-primary"
-                  onClick={() =>
-                    isMuted ? onToggleMute(false, null) : setMuteDialogOpen(true)
-                  }
+                  onClick={onSearchOpen}
                 >
-                  {isMuted ? (
-                    <BellOff className="h-4 w-4" />
-                  ) : (
-                    <Bell className="h-4 w-4" />
-                  )}
+                  <Search className="h-4 w-4" />
                 </Button>
+              </Hint>
+              <Hint label="Media & Documents">
+                <Button
+                  aria-label="Media & Documents"
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-lg hover:bg-primary/10 hover:text-primary"
+                  onClick={onMediaListClick}
+                >
+                  <Image className="h-4 w-4" />
+                </Button>
+              </Hint>
+              <Hint label="Pinned Messages">
+                <Button
+                  aria-label="Pinned Messages"
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-lg hover:bg-primary/10 hover:text-primary"
+                  onClick={onPinnedClick}
+                >
+                  <Pin className="h-4 w-4" />
+                </Button>
+              </Hint>
+              {onToggleMute && (
+                <Hint label={isMuted ? muteLabel || "Muted" : "Mute notifications"}>
+                  <Button
+                    aria-label={isMuted ? muteLabel || "Muted" : "Mute notifications"}
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-lg hover:bg-primary/10 hover:text-primary"
+                    onClick={() =>
+                      isMuted ? onToggleMute(false, null) : setMuteDialogOpen(true)
+                    }
+                  >
+                    {isMuted ? (
+                      <BellOff className="h-4 w-4" />
+                    ) : (
+                      <Bell className="h-4 w-4" />
+                    )}
+                  </Button>
+                </Hint>
               )}
             </>
           )}
           {canInstall && (
-            <Button
-              variant="ghost"
-              size="icon"
-              title="Install App"
-              className="rounded-lg hover:bg-primary/10 hover:text-primary"
-              onClick={install}
-            >
-              <Download className="h-4 w-4" />
-            </Button>
+            <Hint label="Install App">
+              <Button
+                aria-label="Install App"
+                variant="ghost"
+                size="icon"
+                className="rounded-lg hover:bg-primary/10 hover:text-primary"
+                onClick={install}
+              >
+                <Download className="h-4 w-4" />
+              </Button>
+            </Hint>
           )}
           {isSelectionMode && (
             <>
@@ -250,26 +263,30 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
                 </span>
               )}
               {canForwardSelected && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Forward"
-                  className="rounded-lg hover:bg-primary/10 hover:text-primary"
-                  onClick={onForwardSelected}
-                >
-                  <Forward className="h-4 w-4" />
-                </Button>
+                <Hint label="Forward">
+                  <Button
+                    aria-label="Forward"
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-lg hover:bg-primary/10 hover:text-primary"
+                    onClick={onForwardSelected}
+                  >
+                    <Forward className="h-4 w-4" />
+                  </Button>
+                </Hint>
               )}
               {canDeleteSelected && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Delete"
-                  className="rounded-lg hover:bg-destructive/10 hover:text-destructive"
-                  onClick={onDeleteSelected}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                <Hint label="Delete">
+                  <Button
+                    aria-label="Delete"
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-lg hover:bg-destructive/10 hover:text-destructive"
+                    onClick={onDeleteSelected}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </Hint>
               )}
             </>
           )}

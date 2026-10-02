@@ -17,6 +17,8 @@ const URL = {
 export const Securitykey = import.meta.env.VITE_APP_ENCRYPT_KEY || "";
 export const publicToken = import.meta.env.VITE_APP_PUBLIC_TOKEN || "";
 
+const GET_TIMEOUT_MS = 20000;
+
 // API HEADER
 export const apiHeader = (isFormData: any, encryptionLevel: any = 0) => {
   const token = getEncodedCookie("token") || "";
@@ -120,6 +122,9 @@ export const getData = async (api: string, params: any, headers: any) => {
     const response = await axios.get(url, {
       params,
       headers: headers["headers"],
+      // A request started on a dead connection (e.g. right after the PWA wakes
+      // up) must not hang forever — the message catch-up waits on it.
+      timeout: GET_TIMEOUT_MS,
     });
 
     if (String(response?.status) == "200") {

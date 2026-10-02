@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, type Socket } from "socket.io-client";
 import logger from "@/lib/logger";
+import { useResume } from "@/hooks/use-resume";
 
 // ── Talk socket hook ────────────────────────────────────────
 
@@ -146,6 +147,16 @@ export function useTalkSocket({
     };
   }, [baseUrl, talkId, token]);
 
+  // Back from a long background stretch: the socket may be dead while still
+  // reporting `connected`, so drop it and connect fresh. The new `connect`
+  // fires `onConnect(true)`, which runs the catch-up.
+  useResume(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    logger.debug("Talk socket: resumed after background, reconnecting");
+    socket.disconnect().connect();
+  });
+
   // Returns whether the event actually went out. Callers must use this rather
   // than the `isConnected` state to decide "am I online?": handlers get frozen
   // inside memoised children (MessageBubble compares only message fields), so a
@@ -177,6 +188,13 @@ interface UseContactSocketOptions {
   // Multi-device sync for "mark as unread" — emitted only to this user's own
   // room, never to other participants. A `talkUpdated` follows it.
   onMessageMarkedUnread?: (data: any) => void;
+  // Broadcast send progress, addressed to the sender only and only for a send
+  // that answered PENDING. Advisory — the final state comes from REST.
+  onBroadcastProgress?: (data: any) => void;
+  onBroadcastComplete?: (data: any) => void;
+  // Fired after a long background stretch, once the socket has been told to
+  // reconnect — `talkUpdated` events sent meanwhile are gone, so re-read.
+  onResume?: () => void;
 }
 
 export function useContactSocket({
@@ -185,6 +203,9 @@ export function useContactSocket({
   onTalkUpdated,
   onPresenceChanged,
   onMessageMarkedUnread,
+  onBroadcastProgress,
+  onBroadcastComplete,
+  onResume,
 }: UseContactSocketOptions) {
   const socketRef = useRef<Socket | null>(null);
 
@@ -194,6 +215,20 @@ export function useContactSocket({
   onPresenceChangedRef.current = onPresenceChanged;
   const onMessageMarkedUnreadRef = useRef(onMessageMarkedUnread);
   onMessageMarkedUnreadRef.current = onMessageMarkedUnread;
+  const onBroadcastProgressRef = useRef(onBroadcastProgress);
+  onBroadcastProgressRef.current = onBroadcastProgress;
+  const onBroadcastCompleteRef = useRef(onBroadcastComplete);
+  onBroadcastCompleteRef.current = onBroadcastComplete;
+  const onResumeRef = useRef(onResume);
+  onResumeRef.current = onResume;
+
+  useResume(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    logger.debug("Contact socket: resumed after background, reconnecting");
+    socket.disconnect().connect();
+    onResumeRef.current?.();
+  });
 
   useEffect(() => {
     if (!baseUrl || !token) return;
@@ -227,6 +262,8 @@ export function useContactSocket({
     socket.on("messageMarkedUnread", (data) =>
       onMessageMarkedUnreadRef.current?.(data)
     );
+    socket.on("broadcastProgress", (data) => onBroadcastProgressRef.current?.(data));
+    socket.on("broadcastComplete", (data) => onBroadcastCompleteRef.current?.(data));
 
     const pingInterval = setInterval(() => {
       if (socket.connected) socket.emit("ping", {});

@@ -36,6 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Hint } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { formatMessage, formatPreview } from "@/lib/message-formatters";
 import { cn } from "@/lib/utils";
@@ -1196,9 +1197,38 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 </p>
               )}
 
-              {/* Bubble wrapper */}
-              <div className="relative">
+              {/* Bubble wrapper — a pinned bubble drops a little so its corner
+                  badge clears the reaction trigger hanging off the bubble above */}
+              <div className={cn("relative", message.isPinned && !message.isDeleted && "mt-3")}>
                 {renderBubbleContent()}
+
+                {/* Pinned marker on the bubble's top corner — click to unpin */}
+                {message.isPinned && !message.isDeleted && (
+                  <Hint label="Unpin for me">
+                    <button
+                      type="button"
+                      aria-label="Unpin for me"
+                      disabled={isSelectionMode}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTogglePin(message.messageId);
+                      }}
+                      className={cn(
+                        "group/pin pin-badge absolute -top-2 z-[3] flex h-5 w-5 items-center justify-center rounded-full disabled:pointer-events-none",
+                        isSender ? "pin-badge-sent -left-2" : "pin-badge-recv -right-2"
+                      )}
+                    >
+                      <Pin
+                        className={cn(
+                          "h-3 w-3 group-hover/pin:hidden",
+                          // Tilt toward the bubble: the badge sits on opposite corners
+                          isSender ? "-rotate-45" : "rotate-45"
+                        )}
+                      />
+                      <PinOff className="hidden h-3 w-3 group-hover/pin:block" />
+                    </button>
+                  </Hint>
+                )}
 
                 {/* Add reaction button at bottom corner — show on hover OR when bar is open */}
                 {!message.reactions?.length && !isSelectionMode && !readOnly && !message.isDeleted && (
@@ -1273,7 +1303,11 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={confirmClosePoll}>
+              <AlertDialogAction
+                onClick={confirmClosePoll}
+                // White label on dark accents; black accent's light-grey button keeps dark text.
+                className="[.dark:not(.accent-black)_&]:text-white"
+              >
                 Close poll
               </AlertDialogAction>
             </AlertDialogFooter>

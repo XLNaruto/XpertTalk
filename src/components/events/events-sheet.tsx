@@ -14,6 +14,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Hint } from "@/components/ui/tooltip";
 
 /**
  * The Events surface: a list of everything the caller can see, with details
@@ -77,19 +78,20 @@ export function EventsSheet() {
                   Events
                 </span>
                 <div className="ml-auto flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    title="Refresh events"
-                    aria-label="Refresh events"
-                    onClick={() => refreshList()}
-                    disabled={isLoading}
-                  >
-                    <RefreshCw
-                      className={isLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"}
-                    />
-                  </Button>
-                  <Button size="sm" className="dark:text-white" onClick={openCreate}>
+                  <Hint label="Refresh events">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Refresh events"
+                      onClick={() => refreshList()}
+                      disabled={isLoading}
+                    >
+                      <RefreshCw
+                        className={isLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"}
+                      />
+                    </Button>
+                  </Hint>
+                  <Button size="sm" className="[.dark:not(.accent-black)_&]:text-white" onClick={openCreate}>
                     <CalendarPlus className="h-4 w-4" />
                     New
                   </Button>
@@ -128,7 +130,7 @@ export function EventsSheet() {
                       Create one and everyone invited gets reminders before it
                       starts.
                     </p>
-                    <Button size="sm" className="mt-2 dark:text-white" onClick={openCreate}>
+                    <Button size="sm" className="mt-2 [.dark:not(.accent-black)_&]:text-white" onClick={openCreate}>
                       <CalendarPlus className="h-4 w-4" />
                       New event
                     </Button>

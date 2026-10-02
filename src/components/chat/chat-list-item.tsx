@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Ban, Bell, BellOff, Forward, MailOpen, Pin, Trash2 } from "lucide-react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
+import { BiPoll } from "react-icons/bi";
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { Badge } from "@/components/ui/badge";
 import { formatTimeAgo, formatPreview } from "@/lib/message-formatters";
@@ -8,6 +9,7 @@ import { mediaLabel } from "@/lib/media-items";
 import { isTalkMuted, muteStatusLabel } from "@/lib/mute";
 import { MuteDialog } from "@/components/chat/mute-dialog";
 import { cn } from "@/lib/utils";
+import { Hint } from "@/components/ui/tooltip";
 
 function SenderMiniAvatar({ src, name }: { src?: string; name?: string }) {
 
@@ -130,6 +132,17 @@ const ChatListItemInner: React.FC<ChatListItemProps> = ({
       return <span className="italic text-muted-foreground/50 flex gap-1"><Forward className="h-3 w-3" /><span>Forwarded</span></span>;
     }
 
+    // Poll → icon + question, so it doesn't read like a plain text message.
+    if (lastMsgType === "POLL") {
+      const question = data?.lastMessage?.poll?.question || displayMessage;
+      return (
+        <span className="flex items-center gap-1 truncate">
+          <BiPoll className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{question ? `Poll: ${question}` : "Poll"}</span>
+        </span>
+      );
+    }
+
     // A media message can carry a caption, so show the text whenever there IS
     // text — `messageType` only describes how the bubble renders.
     if (displayMessage) {
@@ -197,9 +210,11 @@ const ChatListItemInner: React.FC<ChatListItemProps> = ({
                 </span>
                 <div className="flex shrink-0 items-center gap-1.5">
                   {muted && (
-                    <span title={muteStatusLabel(data)} className="flex items-center">
-                      <BellOff className="h-3 w-3 text-muted-foreground/50" />
-                    </span>
+                    <Hint label={muteStatusLabel(data)}>
+                      <span className="flex items-center">
+                        <BellOff className="h-3 w-3 text-muted-foreground/50" />
+                      </span>
+                    </Hint>
                   )}
                   {data.isPinned && (
                     <Pin className="h-3 w-3 rotate-45 text-primary/40" />

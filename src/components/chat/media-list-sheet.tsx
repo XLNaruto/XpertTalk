@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Image, FileText, Download, Loader2, Play } from "lucide-react";
 import { format } from "date-fns";
+import { VirtuosoGrid, type GridComponents } from "react-virtuoso";
+import { peekThumbnail, requestThumbnail } from "@/lib/media-thumbnails";
 import { apiHeader, getData } from "@/lib/api-helper";
 import { getEncodedCookie } from "@/lib/encryption";
 import { cn } from "@/lib/utils";
@@ -13,78 +15,89 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-// Lazy-loaded media thumbnail — only loads when scrolled into view
-const LazyMediaItem = React.memo(function LazyMediaItem({
+interface MediaItem {
+  mediaId: string;
+  mediaPath: string;
+  mediaType: "IMAGE" | "VIDEO" | "DOCUMENT";
+  name?: string;
+  senderChatuserId?: string;
+  senderName?: string;
+  messageId?: string;
+  created: string;
+}
+
+/** Tiles revealed per batch; the next batch appends when the grid bottoms out. */
+const MEDIA_PAGE_SIZE = 50;
+
+// Grid tile — renders a small cached thumbnail, never the original file,
+// unless thumbnail generation failed.
+const MediaTile = React.memo(function MediaTile({
   item,
   chatuserId,
   onPreview,
   onDownload,
 }: {
-  item: any;
+  item: MediaItem;
   chatuserId: string;
-  onPreview: (item: any) => void;
+  onPreview: (item: MediaItem) => void;
   onDownload: (e: React.MouseEvent, url: string, fileName: string) => void;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isVisible, setIsVisible] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const isVideo = item.mediaType === "VIDEO";
+  // The virtualizer can hand this tile a different item, so a thumbnail is only
+  // trusted when it was made for the current URL — otherwise a stale image (or a
+  // late callback from the previous item's job) would show on the wrong tile.
+  const [loaded, setLoaded] = useState<{ url: string; thumb: string | null } | null>(null);
+  // undefined = still generating, null = failed (fall back to the original).
+  const thumb =
+    loaded?.url === item.mediaPath ? loaded.thumb : peekThumbnail(item.mediaPath);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setIsVisible(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
+    const url = item.mediaPath;
+    if (peekThumbnail(url) !== undefined) return;
+    return requestThumbnail(url, isVideo ? "video" : "image", (next) =>
+      setLoaded({ url, thumb: next })
     );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  const isVideo = item.mediaType === "VIDEO";
+  }, [item.mediaPath, isVideo]);
 
   return (
     <div
-      ref={containerRef}
-      className="group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-black/5 dark:bg-white/5"
+      className="group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-muted/40"
       onClick={() => onPreview(item)}
     >
-      {isVisible ? (
+      {thumb ? (
+        <img
+          src={thumb}
+          alt={item.name}
+          decoding="async"
+          draggable={false}
+          className="h-full w-full object-cover"
+        />
+      ) : thumb === null ? (
         isVideo ? (
-          <>
-            <video
-              src={item.mediaPath}
-              muted
-              preload="metadata"
-              className={cn(
-                "h-full w-full object-cover transition-opacity duration-300",
-                isLoaded ? "opacity-100" : "opacity-0"
-              )}
-              onLoadedData={() => setIsLoaded(true)}
-            />
-            <div className="absolute left-1/2 top-1/2 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-primary/80 backdrop-blur-sm">
-              <Play className="ml-0.5 h-3 w-3 fill-white text-white" />
-            </div>
-          </>
+          <video
+            src={item.mediaPath}
+            muted
+            playsInline
+            preload="metadata"
+            className="h-full w-full object-cover"
+          />
         ) : (
           <img
             src={item.mediaPath}
             alt={item.name}
-            className={cn(
-              "h-full w-full object-cover transition-opacity duration-300",
-              isLoaded ? "opacity-100" : "opacity-0"
-            )}
-            onLoad={() => setIsLoaded(true)}
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+            className="h-full w-full object-cover"
           />
         )
-      ) : null}
-      {/* Skeleton while loading */}
-      {!isLoaded && (
+      ) : (
         <div className="absolute inset-0 animate-pulse bg-muted/40" />
+      )}
+      {isVideo && (
+        <div className="absolute left-1/2 top-1/2 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/55">
+          <Play className="ml-0.5 h-3 w-3 fill-white text-white" />
+        </div>
       )}
       {/* Hover overlay with download */}
       <div className="absolute inset-0 flex items-end justify-between bg-gradient-to-t from-black/50 to-transparent opacity-0 transition-opacity group-hover:opacity-100">
@@ -92,8 +105,8 @@ const LazyMediaItem = React.memo(function LazyMediaItem({
           {String(item.senderChatuserId) === String(chatuserId) ? "You" : item.senderName}
         </span>
         <button
-          className="m-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm transition-colors hover:bg-black/60"
-          onClick={(e) => onDownload(e, item.mediaPath, item.name)}
+          className="m-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/50 transition-colors hover:bg-black/70"
+          onClick={(e) => onDownload(e, item.mediaPath, item.name || "media")}
         >
           <Download className="h-3 w-3 text-white" />
         </button>
@@ -101,6 +114,69 @@ const LazyMediaItem = React.memo(function LazyMediaItem({
     </div>
   );
 });
+
+// Stable identity — VirtuosoGrid remounts slots when `components` changes.
+const gridComponents: GridComponents = {
+  // Cheap stand-in while flinging, so tiles (and thumbnail jobs) aren't
+  // created for rows that fly past in a fraction of a second.
+  ScrollSeekPlaceholder: () => (
+    <div className="aspect-square rounded-lg bg-muted/40" />
+  ),
+  Footer: ({ context }) =>
+    context?.hasMore ? (
+      <div className="flex justify-center pb-4">
+        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+      </div>
+    ) : null,
+};
+
+// Virtualized 3-column grid: only tiles near the viewport are in the DOM, and
+// the list is revealed MEDIA_PAGE_SIZE at a time as the user reaches the end.
+function VirtualMediaGrid({
+  items,
+  chatuserId,
+  onPreview,
+  onDownload,
+}: {
+  items: MediaItem[];
+  chatuserId: string;
+  onPreview: (item: MediaItem) => void;
+  onDownload: (e: React.MouseEvent, url: string, fileName: string) => void;
+}) {
+  const [visibleCount, setVisibleCount] = useState(MEDIA_PAGE_SIZE);
+  const visibleItems = useMemo(() => items.slice(0, visibleCount), [items, visibleCount]);
+  const hasMore = visibleCount < items.length;
+
+  return (
+    <VirtuosoGrid
+      className="h-full overscroll-contain"
+      data={visibleItems}
+      context={{ hasMore }}
+      components={gridComponents}
+      endReached={() => {
+        if (hasMore) setVisibleCount((n) => n + MEDIA_PAGE_SIZE);
+      }}
+      increaseViewportBy={300}
+      scrollSeekConfiguration={{
+        enter: (velocity) => Math.abs(velocity) > 1500,
+        exit: (velocity) => Math.abs(velocity) < 150,
+      }}
+      listClassName="grid grid-cols-3 gap-1.5 p-4"
+      // mediaId can repeat (e.g. forwarded copies of one file); a duplicate key makes
+      // React reuse one tile for several items. The list only ever appends, so
+      // pairing it with the index is stable.
+      computeItemKey={(index, item) => `${item.mediaId}:${index}`}
+      itemContent={(_, item) => (
+        <MediaTile
+          item={item}
+          chatuserId={chatuserId}
+          onPreview={onPreview}
+          onDownload={onDownload}
+        />
+      )}
+    />
+  );
+}
 
 interface MediaListSheetProps {
   open: boolean;
@@ -116,7 +192,7 @@ export function MediaListSheet({
   onMediaClick,
 }: MediaListSheetProps) {
   const chatuserId = getEncodedCookie("chatuserId") || "";
-  const [mediaItems, setMediaItems] = useState<any[]>([]);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const fetchMedia = useCallback(async () => {
@@ -148,7 +224,7 @@ export function MediaListSheet({
     }
   }, [open, talkId, fetchMedia]);
 
-  const handleDownload = async (e: React.MouseEvent, url: string, fileName: string) => {
+  const handleDownload = useCallback(async (e: React.MouseEvent, url: string, fileName: string) => {
     e.stopPropagation();
     try {
       const response = await fetch(url);
@@ -164,9 +240,9 @@ export function MediaListSheet({
     } catch {
       window.open(url, "_blank");
     }
-  };
+  }, []);
 
-  const handlePreview = (item: any) => {
+  const handlePreview = useCallback((item: MediaItem) => {
     if (item.mediaType === "IMAGE" || item.mediaType === "VIDEO") {
       onOpenChange(false);
       setTimeout(() => {
@@ -182,7 +258,7 @@ export function MediaListSheet({
         );
       }, 300);
     }
-  };
+  }, [mediaItems, onOpenChange, onMediaClick]);
 
   const images = useMemo(
     () =>
@@ -244,27 +320,20 @@ export function MediaListSheet({
             </TabsList>
 
             {/* Photos & Videos tab */}
-            <TabsContent value="media" className="flex-1 overflow-auto mt-0">
-              <ScrollArea className="h-full">
-                {images.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center gap-2 py-16">
-                    <Image className="h-8 w-8 text-muted-foreground/30" />
-                    <p className="text-xs text-muted-foreground">No photos or videos</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-3 gap-1.5 p-4">
-                    {images.map((item) => (
-                      <LazyMediaItem
-                        key={item.mediaId}
-                        item={item}
-                        chatuserId={chatuserId}
-                        onPreview={handlePreview}
-                        onDownload={handleDownload}
-                      />
-                    ))}
-                  </div>
-                )}
-              </ScrollArea>
+            <TabsContent value="media" className="mt-0 min-h-0 flex-1">
+              {images.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-2 py-16">
+                  <Image className="h-8 w-8 text-muted-foreground/30" />
+                  <p className="text-xs text-muted-foreground">No photos or videos</p>
+                </div>
+              ) : (
+                <VirtualMediaGrid
+                  items={images}
+                  chatuserId={chatuserId}
+                  onPreview={handlePreview}
+                  onDownload={handleDownload}
+                />
+              )}
             </TabsContent>
 
             {/* Documents tab */}
@@ -299,7 +368,7 @@ export function MediaListSheet({
                           className={cn(
                             "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-primary/10"
                           )}
-                          onClick={(e) => handleDownload(e, item.mediaPath, item.name)}
+                          onClick={(e) => handleDownload(e, item.mediaPath, item.name || "document")}
                         >
                           <Download className="h-4 w-4 text-primary/70" />
                         </button>

@@ -6,7 +6,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { BarChart3, Paperclip, SendHorizonal, X, Reply, Pencil } from "lucide-react";
+import { Paperclip, SendHorizonal, X, Reply, Pencil } from "lucide-react";
+import { BiPoll } from "react-icons/bi";
 import { cn } from "@/lib/utils";
 import { formatMessageWithMentions, formatPreview } from "@/lib/message-formatters";
 import useFileUpload from "@/hooks/use-file-upload";
@@ -21,6 +22,7 @@ import { extractUrls, getCachedLinkPreview } from "@/lib/link-preview";
 import { useLinkPreviews } from "@/hooks/use-link-preview";
 import LinkPreviewCard from "@/components/chat/link-preview-card";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { Hint } from "@/components/ui/tooltip";
 
 // ── Types ──
 
@@ -665,18 +667,20 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
                   horizontal
                   className="h-full w-[300px] max-w-none"
                 />
-                <button
-                  type="button"
-                  title="Remove preview"
-                  onClick={() =>
-                    setDismissedUrls((prev) =>
-                      prev.includes(url) ? prev : [...prev, url]
-                    )
-                  }
-                  className="mt-0.5 flex h-6 w-6 shrink-0 self-start items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                <Hint label="Remove preview">
+                  <button
+                    aria-label="Remove preview"
+                    type="button"
+                    onClick={() =>
+                      setDismissedUrls((prev) =>
+                        prev.includes(url) ? prev : [...prev, url]
+                      )
+                    }
+                    className="mt-0.5 flex h-6 w-6 shrink-0 self-start items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </Hint>
               </div>
             ))}
           </div>
@@ -731,27 +735,29 @@ const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(
             {/* Poll — its own control, next to Attach. Hidden while editing:
                 the server rejects poll edits, so it would go nowhere. */}
             {onCreatePoll && !isEditing && (
-              <button
-                type="button"
-                onClick={onCreatePoll}
-                aria-label="Create poll"
-                title="Create poll"
-                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-              >
-                <BarChart3 className="h-5 w-5" />
-              </button>
+              <Hint label="Create poll">
+                <button
+                  type="button"
+                  onClick={onCreatePoll}
+                  aria-label="Create poll"
+                  className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                >
+                  <BiPoll className="h-5 w-5" />
+                </button>
+              </Hint>
             )}
 
             {/* Attach button */}
-            <button
-              type="button"
-              onClick={openFilePicker}
-              aria-label="Attach files"
-              title="Attach files"
-              className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-            >
-              <Paperclip className="h-5 w-5" />
-            </button>
+            <Hint label="Attach files">
+              <button
+                type="button"
+                onClick={openFilePicker}
+                aria-label="Attach files"
+                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+              >
+                <Paperclip className="h-5 w-5" />
+              </button>
+            </Hint>
 
             {/* Hidden file input */}
             <input

@@ -376,7 +376,8 @@ function EventForm({
         <Button
           onClick={submit}
           disabled={submitting}
-          className="dark:text-white"
+          // White label on dark accents; black accent's light-grey button keeps dark text.
+          className="[.dark:not(.accent-black)_&]:text-white"
         >
           {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
           {retryable && !submitting && <RefreshCw className="h-4 w-4" />}

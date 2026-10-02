@@ -39,10 +39,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const Lightbox = React.lazy(() => import("yet-another-react-lightbox"));
-import Video from "yet-another-react-lightbox/plugins/video";
-import Zoom from "yet-another-react-lightbox/plugins/zoom";
-import "yet-another-react-lightbox/styles.css";
+const MediaLightbox = React.lazy(() => import("@/components/chat/media-lightbox"));
+import type { LightboxAction } from "@/components/chat/media-lightbox";
 import logger from "@/lib/logger";
 import { parseMediaConverted } from "@/lib/media-convert";
 
@@ -66,13 +64,13 @@ export function ChatArea() {
   const isGroupAdmin = useChatStore((s) => s.activeChat.isGroupAdmin);
   const deepLinkMessageId = useChatStore((s) => s.deepLinkMessageId);
   const setDeepLinkMessageId = useChatStore((s) => s.setDeepLinkMessageId);
-  const getMessagesList = useMessageCacheStore((s) => s.getMessagesList);
 
   // Message cache store
   const messages = useMessageCacheStore((s) => s.messages);
   const formattedMessages = useMessageCacheStore((s) => s.formattedMessages);
   const dispatchMessage = useMessageCacheStore((s) => s.dispatchMessage);
   const switchChat = useMessageCacheStore((s) => s.switchChat);
+  const resyncChat = useMessageCacheStore((s) => s.resyncChat);
   const refreshPolls = useMessageCacheStore((s) => s.refreshPolls);
   // UI store
   const handleCreateGroupClose = useUIStore((s) => s.handleCreateGroupClose);
@@ -171,12 +169,11 @@ export function ChatArea() {
     token: xtoken || null,
     onConnect: (isReconnect: boolean) => {
       
-      // On reconnect, fetch any messages missed during the disconnect gap
+      // On reconnect (including the forced one after a long background
+      // stretch), re-sync like a refresh would: messages missed during the
+      // gap, plus edits/deletes made meanwhile.
       if (isReconnect && talkId) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg?.messageId) {
-          getMessagesList(talkId, lastMsg.messageId, "newer", -1);
-        }
+        resyncChat(talkId);
         // The catch-up above only APPENDS — a `pollUpdated` missed during the
         // gap would leave an on-screen poll stale, so re-read the polls too.
         // The list is addressed to us, so `myVotes` and `canClose` come back
@@ -970,6 +967,114 @@ export function ChatArea() {
     );
   }
 
+  // Toolbar actions for the open lightbox slide.
+  const canDeleteSlide =
+    !!currentSlide &&
+    String(currentSlide.senderChatuserId) === String(chatuserId) &&
+    // Hidden once the message is older than 24 hours (admins are exempt —
+    // same rule as the message bubble context menu).
+    ((import.meta.env.VITE_APP_USER || "employee") === "admin" ||
+      (!!currentSlide.created &&
+        Date.now() - new Date(currentSlide.created).getTime() < 24 * 60 * 60 * 1000));
+
+  const lightboxActions: LightboxAction[] = !currentSlide
+    ? []
+    : [
+        ...(currentSlide.type === "image"
+          ? [
+              {
+                key: "copy",
+                label: "Copy",
+                icon: <Copy className="size-5" />,
+                onClick: async () => {
+                  try {
+                    await copyImageToClipboard(currentSlide.mediaPath);
+                    toast.success("Image copied to clipboard");
+                  } catch {
+                    toast.error("Couldn't copy image");
+                  }
+                },
+              },
+            ]
+          : []),
+        {
+          key: "download",
+          label: "Download",
+          icon: <Download className="size-5" />,
+          onClick: async () => {
+            const url = currentSlide.mediaPath;
+            const fileName = currentSlide.mediaName || "download";
+            try {
+              const response = await fetch(url);
+              const blob = await response.blob();
+              const blobUrl = URL.createObjectURL(blob);
+              const link = document.createElement("a");
+              link.href = blobUrl;
+              link.download = fileName;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(blobUrl);
+            } catch {
+              window.open(url, "_blank");
+            }
+          },
+        },
+        {
+          key: "reply",
+          label: "Reply",
+          icon: <Reply className="size-5" />,
+          onClick: () => {
+            handleReply(currentSlide);
+            closeLightbox();
+          },
+        },
+        {
+          key: "forward",
+          label: "Forward",
+          icon: <Forward className="size-5" />,
+          onClick: () => {
+            // From the preview only the open attachment goes: an album
+            // forwards just this image, a lone attachment forwards its
+            // message (which keeps the "Forwarded" label). Forwarding
+            // the whole album is the grid/context-menu action.
+            const isAlbumItem = (currentSlide.mediaCount ?? 1) > 1 && !!currentSlide.mediaId;
+            if (isAlbumItem) {
+              setForwardMediaIds([currentSlide.mediaId!]);
+              setForwardMessageIds([]);
+              setForwardOpen(true);
+              closeLightbox();
+              return;
+            }
+            const id = currentSlide.forwardFromMessageId || currentSlide.messageId;
+            if (id) {
+              setForwardMediaIds([]);
+              setForwardMessageIds([id]);
+              setForwardOpen(true);
+              closeLightbox();
+            }
+          },
+        },
+        {
+          key: "pin",
+          label: currentSlide.isPinned ? "Unpin" : "Pin",
+          icon: currentSlide.isPinned ? <PinOff className="size-5" /> : <Pin className="size-5" />,
+          onClick: () => {
+            if (currentSlide.messageId) handleTogglePin(currentSlide.messageId);
+          },
+        },
+        ...(canDeleteSlide
+          ? [
+              {
+                key: "delete",
+                label: "Delete",
+                icon: <Trash2 className="size-5" />,
+                onClick: () => setLightboxDeleteOpen(true),
+              },
+            ]
+          : []),
+      ];
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -1183,163 +1288,20 @@ export function ChatArea() {
       {/* Lightbox */}
       {openLightbox && (
         <Suspense fallback={null}>
-          <Lightbox
-            open={openLightbox}
-            close={closeLightbox}
-            slides={mediaSlides as any}
+          <MediaLightbox
+            slides={mediaSlides}
             index={currentIndex}
-            plugins={[Video, Zoom]}
-            carousel={{ finite: true }}
-            on={{
-              view: ({ index }: { index: number }) => {
-                setCurrentIndex(index);
-                // Warm the clipboard cache for the visible image so the toolbar
-                // "Copy" is a pure clipboard write (~ms) instead of a slow fetch.
-                const slide = (mediaSlides as any)[index];
-                if (slide?.type === "image" && slide?.mediaPath) {
-                  prewarmImage(slide.mediaPath);
-                }
-              },
+            onClose={closeLightbox}
+            onIndexChange={(index) => {
+              setCurrentIndex(index);
+              // Warm the clipboard cache for the visible image so the toolbar
+              // "Copy" is a pure clipboard write (~ms) instead of a slow fetch.
+              const slide = mediaSlides[index];
+              if (slide?.type === "image" && slide?.mediaPath) {
+                prewarmImage(slide.mediaPath);
+              }
             }}
-            toolbar={{
-              buttons: [
-                // Copy — images only (covers single images and media-grid previews)
-                ...(currentSlide?.type === "image"
-                  ? [
-                      <button
-                        key="lightbox-copy"
-                        type="button"
-                        className="yarl__button"
-                        title="Copy"
-                        aria-label="Copy"
-                        onClick={async () => {
-                          if (!currentSlide?.mediaPath) return;
-                          try {
-                            await copyImageToClipboard(currentSlide.mediaPath);
-                            toast.success("Image copied to clipboard");
-                          } catch {
-                            toast.error("Couldn't copy image");
-                          }
-                        }}
-                      >
-                        <Copy className="h-6 w-6" />
-                      </button>,
-                    ]
-                  : []),
-                <button
-                  key="lightbox-download"
-                  type="button"
-                  className="yarl__button"
-                  title="Download"
-                  aria-label="Download"
-                  onClick={async () => {
-                    if (!currentSlide) return;
-                    const url = currentSlide.mediaPath;
-                    const fileName = currentSlide.mediaName || "download";
-                    try {
-                      const response = await fetch(url);
-                      const blob = await response.blob();
-                      const blobUrl = URL.createObjectURL(blob);
-                      const link = document.createElement("a");
-                      link.href = blobUrl;
-                      link.download = fileName;
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                      URL.revokeObjectURL(blobUrl);
-                    } catch {
-                      window.open(url, "_blank");
-                    }
-                  }}
-                >
-                  <Download className="h-6 w-6" />
-                </button>,
-                <button
-                  key="lightbox-reply"
-                  type="button"
-                  className="yarl__button"
-                  title="Reply"
-                  aria-label="Reply"
-                  onClick={() => {
-                    if (!currentSlide) return;
-                    handleReply(currentSlide);
-                    closeLightbox();
-                  }}
-                >
-                  <Reply className="h-6 w-6" />
-                </button>,
-                <button
-                  key="lightbox-forward"
-                  type="button"
-                  className="yarl__button"
-                  title="Forward"
-                  aria-label="Forward"
-                  onClick={() => {
-                    if (!currentSlide) return;
-                    // From the preview only the open attachment goes: an album
-                    // forwards just this image, a lone attachment forwards its
-                    // message (which keeps the "Forwarded" label). Forwarding
-                    // the whole album is the grid/context-menu action.
-                    const isAlbumItem =
-                      (currentSlide.mediaCount ?? 1) > 1 && !!currentSlide.mediaId;
-                    if (isAlbumItem) {
-                      setForwardMediaIds([currentSlide.mediaId!]);
-                      setForwardMessageIds([]);
-                      setForwardOpen(true);
-                      closeLightbox();
-                      return;
-                    }
-                    const id = currentSlide.forwardFromMessageId || currentSlide.messageId;
-                    if (id) {
-                      setForwardMediaIds([]);
-                      setForwardMessageIds([id]);
-                      setForwardOpen(true);
-                      closeLightbox();
-                    }
-                  }}
-                >
-                  <Forward className="h-6 w-6" />
-                </button>,
-                <button
-                  key="lightbox-pin"
-                  type="button"
-                  className="yarl__button"
-                  title={currentSlide?.isPinned ? "Unpin" : "Pin"}
-                  aria-label={currentSlide?.isPinned ? "Unpin" : "Pin"}
-                  onClick={() => {
-                    if (!currentSlide?.messageId) return;
-                    handleTogglePin(currentSlide.messageId);
-                  }}
-                >
-                  {currentSlide?.isPinned
-                    ? <PinOff className="h-6 w-6" />
-                    : <Pin className="h-6 w-6" />}
-                </button>,
-                // Only show delete for sender's own messages, and hide once
-                // the message is older than 24 hours (admins are exempt — same
-                // rule as the message bubble context menu).
-                ...(currentSlide &&
-                String(currentSlide.senderChatuserId) === String(chatuserId) &&
-                ((import.meta.env.VITE_APP_USER || "employee") === "admin" ||
-                  (currentSlide.created &&
-                    Date.now() - new Date(currentSlide.created).getTime() <
-                      24 * 60 * 60 * 1000))
-                  ? [
-                      <button
-                        key="lightbox-delete"
-                        type="button"
-                        className="yarl__button"
-                        title="Delete"
-                        aria-label="Delete"
-                        onClick={() => setLightboxDeleteOpen(true)}
-                      >
-                        <Trash2 className="h-6 w-6" />
-                      </button>,
-                    ]
-                  : []),
-                "close",
-              ],
-            }}
+            actions={lightboxActions}
           />
         </Suspense>
       )}

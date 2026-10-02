@@ -250,7 +250,7 @@ export function nextSelection(poll: Poll, optionId: string): string[] {
 export const POLL_QUESTION_MAX = 255;
 export const POLL_OPTION_MAX = 100;
 export const POLL_MIN_OPTIONS = 2;
-export const POLL_MAX_OPTIONS = 12;
+export const POLL_MAX_OPTIONS = 50;
 
 export interface PollDraftOption {
   /** Stable across re-orders and removals — used as the React key AND the id. */

@@ -40,6 +40,12 @@ interface MessageCacheStore {
   unreadMarkToken: number;
   // Actions
   switchChat: (talkId: string) => Promise<void>;
+  /**
+   * Bring the open talk in line with the server the way a page refresh would
+   * (new rows, edits, deletes, poll tallies) without clearing the list.
+   * `catchUpNewer` also fetches every row newer than the last one held.
+   */
+  resyncChat: (talkId: string, catchUpNewer?: boolean) => Promise<void>;
   getMessagesList: (
     talkId: string,
     fromMessageId?: string,
@@ -451,6 +457,22 @@ export const useMessageCacheStore = create<MessageCacheStore>((set, get) => ({
     }
 
     // Also do a FULL sync for edits/deletes
+    await get().resyncChat(talkId, false);
+  },
+
+  resyncChat: async (talkId: string, catchUpNewer = true) => {
+    if (!talkId || get().activeTalkId !== talkId) return;
+
+    // Everything newer than what we hold — the full list below is only the
+    // latest page, so a long gap would otherwise leave a hole.
+    if (catchUpNewer) {
+      const { messages } = get();
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.messageId) {
+        await get().getMessagesList(talkId, lastMsg.messageId, 'newer', -1);
+      }
+    }
+
     try {
       const response: any = await getData(
         'chat/message/list',
@@ -462,7 +484,12 @@ export const useMessageCacheStore = create<MessageCacheStore>((set, get) => ({
         const { messages: currentMsgs, activeTalkId } = get();
         if (activeTalkId !== talkId) return;
         if (currentMsgs.length > 0 && freshFull.length > 0) {
-          const synced = syncMessages(currentMsgs, freshFull);
+          // The full list is only the latest page. Rows older than it (loaded by
+          // scrolling up) aren't in it, so they must not be read as "deleted".
+          const oldestFresh = Math.min(...freshFull.map((m) => new Date(m.created).getTime()));
+          const older = currentMsgs.filter((m) => new Date(m.created).getTime() < oldestFresh);
+          const inWindow = currentMsgs.filter((m) => !(new Date(m.created).getTime() < oldestFresh));
+          const synced = [...older, ...syncMessages(inWindow, freshFull)];
           if (JSON.stringify(synced.map(m => m.messageId)) !== JSON.stringify(currentMsgs.map(m => m.messageId))
             || synced.some((m, i) => m.updated !== currentMsgs[i]?.updated)) {
             const trimmed = synced.slice(-MAX_CACHED_MESSAGES);

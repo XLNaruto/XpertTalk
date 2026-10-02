@@ -58,6 +58,27 @@ function isHeicFile(file: File): boolean {
   );
 }
 
+/**
+ * The same type/size rules the chat composer applies, for one file. Returns
+ * null when the file is fine, otherwise a short reason. Used by composers that
+ * manage their own attachment state (broadcasts).
+ */
+export function validateAttachment(file: File): string | null {
+  const heic = isHeicFile(file);
+  if (!heic && !ALL_ALLOWED.includes(file.type)) return "File type not supported";
+  if (VIDEO_TYPES.includes(file.type)) {
+    return file.size <= MAX_VIDEO_SIZE ? null : "Too large (max 18MB)";
+  }
+  return file.size <= MAX_DOC_IMAGE_SIZE ? null : "Too large (max 12MB)";
+}
+
+/** IMAGE / VIDEO / DOCUMENT, as the upload endpoint expects. */
+export function attachmentType(file: File): "IMAGE" | "VIDEO" | "DOCUMENT" {
+  if (file.type.startsWith("image/") || isHeicFile(file)) return "IMAGE";
+  if (file.type.startsWith("video/")) return "VIDEO";
+  return "DOCUMENT";
+}
+
 // A pasted image can arrive as a URL/text (e.g. browser "Copy image address")
 // rather than file bytes. Detect that and fetch it into a real File.
 const IMAGE_URL_RE =

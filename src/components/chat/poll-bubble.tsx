@@ -1,5 +1,6 @@
 import React from "react";
-import { BarChart3, Check, Lock, Loader2, Users } from "lucide-react";
+import { Check, Lock, Loader2, Users } from "lucide-react";
+import { BiPoll } from "react-icons/bi";
 import { cn } from "@/lib/utils";
 import {
   myVotesOf,
@@ -10,6 +11,7 @@ import {
   type Poll,
   type PollOption,
 } from "@/lib/polls";
+import { Hint } from "@/components/ui/tooltip";
 
 interface PollBubbleProps {
   messageId: string;
@@ -42,21 +44,22 @@ function MiniAvatar({
 }) {
   const initial = (name || "?").trim().charAt(0).toUpperCase() || "?";
   return (
-    <span
-      className={cn(
-        "flex h-[17px] w-[17px] items-center justify-center overflow-hidden rounded-full text-[8px] font-bold ring-[1.5px]",
-        isSender
-          ? "bg-white/30 text-white ring-white/25"
-          : "bg-primary/15 text-primary ring-background"
-      )}
-      title={name}
-    >
-      {src ? (
-        <img src={src} alt={name} className="h-full w-full object-cover" />
-      ) : (
-        initial
-      )}
-    </span>
+    <Hint label={name}>
+      <span
+        className={cn(
+          "flex h-[17px] w-[17px] items-center justify-center overflow-hidden rounded-full text-[8px] font-bold ring-[1.5px]",
+          isSender
+            ? "bg-white/30 text-white ring-white/25"
+            : "bg-primary/15 text-primary ring-background"
+        )}
+      >
+        {src ? (
+          <img src={src} alt={name} className="h-full w-full object-cover" />
+        ) : (
+          initial
+        )}
+      </span>
+    </Hint>
   );
 }
 
@@ -115,7 +118,7 @@ export function PollBubble({
             isSender ? "bg-white/20 text-white" : "bg-primary/12 text-primary"
           )}
         >
-          <BarChart3 className="h-[15px] w-[15px]" />
+          <BiPoll className="h-[15px] w-[15px]" />
         </span>
 
         <div className="min-w-0 flex-1">
@@ -193,17 +196,18 @@ export function PollBubble({
               {/* The vote target covers the WHOLE row — the tally column and the
                   padding included — rather than just the label. The content
                   above it is click-through, except the avatar stack. */}
-              <button
-                type="button"
-                disabled={!canVote}
-                onClick={() => handleOptionClick(option)}
-                title={option.text}
-                aria-label={option.text}
-                className={cn(
-                  "absolute inset-0 z-0",
-                  canVote ? "cursor-pointer" : "cursor-default"
-                )}
-              />
+              <Hint label={canVote ? option.text : undefined}>
+                <button
+                  type="button"
+                  disabled={!canVote}
+                  onClick={() => handleOptionClick(option)}
+                  aria-label={option.text}
+                  className={cn(
+                    "absolute inset-0 z-0",
+                    canVote ? "cursor-pointer" : "cursor-default"
+                  )}
+                />
+              </Hint>
 
               <div className="pointer-events-none relative z-10 flex items-center gap-2 py-2.5 pl-2.5 pr-3">
                 {/* Radio-like for a single-answer poll, checkbox-like for multi */}

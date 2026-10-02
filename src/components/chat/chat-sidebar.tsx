@@ -8,6 +8,7 @@ import {
   CheckCheck,
   ChevronDown,
   LogOut,
+  Megaphone,
   MessageSquare,
   Moon,
   Palette,
@@ -25,6 +26,8 @@ import { useChatStore } from "@/stores/chat-store";
 import { useUserListStore } from "@/stores/user-list-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useEventsStore } from "@/stores/events-store";
+import { useBroadcastStore } from "@/stores/broadcast-store";
+import { BroadcastSidebarList } from "@/components/broadcast/broadcast-sidebar-list";
 import { useMessageCacheStore } from "@/stores/message-cache-store";
 import { useContactSocket } from "@/hooks/use-socket";
 import { apiHeader, getData, postData } from "@/lib/api-helper";
@@ -59,8 +62,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { Hint } from "@/components/ui/tooltip";
 
 const userStage = import.meta.env.VITE_APP_USER || "employee"; // kept for admin check in canDelete
+// Broadcast lists are still in development — flip on to show the header
+// button and the "Broadcast" filter again.
+const BROADCAST_ENABLED = false;
 
 // ── Collapsible chat section ────────────────────────────────────────
 function ChatSection({
@@ -302,7 +309,7 @@ export function ChatSidebar() {
     open: boolean;
     talkId: string;
   }>({ open: false, talkId: "" });
-  const [chatFilter, setChatFilter] = useState<"all" | "group" | "unread">(
+  const [chatFilter, setChatFilter] = useState<"all" | "group" | "unread" | "broadcast">(
     "all",
   );
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
@@ -313,6 +320,11 @@ export function ChatSidebar() {
   const xtoken = getEncodedCookie("token") || "";
   const chatuserId = getEncodedCookie("chatuserId") || "";
   const openEvents = useEventsStore((s) => s.openEvents);
+  const openBroadcasts = useBroadcastStore((s) => s.open);
+  const activeListId = useBroadcastStore((s) => s.activeListId);
+  const openListChat = useBroadcastStore((s) => s.openListChat);
+  // While a broadcast list is open in the main area, no chat row is "active".
+  const highlightTalkId = activeListId ? "" : talkIdState;
 
   // ── Contact Socket.IO ──
   useContactSocket({
@@ -321,6 +333,16 @@ export function ChatSidebar() {
     onTalkUpdated: (newMessage: any) => {
       updateUserList(newMessage);
     },
+    // Back after a long background stretch — `talkUpdated` events sent while
+    // the socket was dead are gone, so re-read the list like a refresh.
+    onResume: () => {
+      getUserList();
+    },
+    // Progress of our own PENDING broadcasts — they only move a progress bar.
+    onBroadcastProgress: (frame: any) =>
+      useBroadcastStore.getState().applyFrame(frame, false),
+    onBroadcastComplete: (frame: any) =>
+      useBroadcastStore.getState().applyFrame(frame, true),
     // Another device of THIS user marked a message unread. Nobody else gets
     // this event; a `talkUpdated` with the refreshed count follows it.
     onMessageMarkedUnread: (data: any) => {
@@ -347,58 +369,84 @@ export function ChatSidebar() {
   const activeTalkIdRef = useRef(talkIdState);
   activeTalkIdRef.current = talkIdState;
 
+  // Fold one `talkUpdated` payload into the list. Pure — sorting happens once
+  // per batch, not per payload.
+  const applyTalkUpdate = (prev: any[], newMessage: any): any[] => {
+    const talkId = newMessage.talkId;
+    const isActiveChat = talkId === activeTalkIdRef.current;
+    // For the chat the user is currently viewing, MessageList owns the unread
+    // count (it ticks it down as the viewport marks messages read). Don't let
+    // the server's talkUpdated value clobber that — preserve the local count.
+    const prevEntry = prev.find((u) => u.talkId === talkId);
+    // Mute state isn't part of a message update — keep whatever the row
+    // already had unless the payload actually carries it, so a mute isn't
+    // silently dropped by the next incoming message.
+    const muteFields =
+      "isMuted" in (newMessage || {})
+        ? {}
+        : {
+            isMuted: prevEntry?.isMuted ?? false,
+            muteUntil: prevEntry?.muteUntil ?? null,
+          };
+    const entry = isActiveChat
+      ? { ...newMessage, ...muteFields, unreadCount: prevEntry?.unreadCount ?? 0 }
+      : { ...newMessage, ...muteFields };
+    const newSendAt = newMessage?.lastMessage?.sendAt
+      ? new Date(newMessage.lastMessage.sendAt).getTime()
+      : newMessage?.created
+        ? new Date(newMessage.created).getTime()
+        : 0;
+
+    const updated = [...prev];
+    const idx = updated.findIndex((u) => u.talkId === talkId);
+
+    if (idx !== -1) {
+      const existing = updated[idx];
+      const existingSendAt = existing?.lastMessage?.sendAt
+        ? new Date(existing.lastMessage.sendAt).getTime()
+        : existing?.created
+          ? new Date(existing.created).getTime()
+          : 0;
+      if (existingSendAt === newSendAt) {
+        updated[idx] = entry;
+      } else {
+        updated.splice(idx, 1);
+        updated.push(entry);
+      }
+    } else {
+      updated.push(entry);
+    }
+
+    return updated;
+  };
+
+  // A broadcast delivers one message per recipient, so the socket can fire
+  // hundreds of `talkUpdated` in a burst. Queue them and apply the whole batch
+  // in one state update (one sort, one render) instead of one per event.
+  const pendingTalkUpdatesRef = useRef<any[]>([]);
+  const talkFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const updateUserList = useCallback(
     (newMessage: any) => {
-      setUserList((prev: any[]) => {
-        const talkId = newMessage.talkId;
-        const isActiveChat = talkId === activeTalkIdRef.current;
-        // For the chat the user is currently viewing, MessageList owns the unread
-        // count (it ticks it down as the viewport marks messages read). Don't let
-        // the server's talkUpdated value clobber that — preserve the local count.
-        const prevEntry = prev.find((u) => u.talkId === talkId);
-        // Mute state isn't part of a message update — keep whatever the row
-        // already had unless the payload actually carries it, so a mute isn't
-        // silently dropped by the next incoming message.
-        const muteFields =
-          "isMuted" in (newMessage || {})
-            ? {}
-            : {
-                isMuted: prevEntry?.isMuted ?? false,
-                muteUntil: prevEntry?.muteUntil ?? null,
-              };
-        const entry = isActiveChat
-          ? { ...newMessage, ...muteFields, unreadCount: prevEntry?.unreadCount ?? 0 }
-          : { ...newMessage, ...muteFields };
-        const newSendAt = newMessage?.lastMessage?.sendAt
-          ? new Date(newMessage.lastMessage.sendAt).getTime()
-          : newMessage?.created
-            ? new Date(newMessage.created).getTime()
-            : 0;
-
-        const updated = [...prev];
-        const idx = updated.findIndex((u) => u.talkId === talkId);
-
-        if (idx !== -1) {
-          const existing = updated[idx];
-          const existingSendAt = existing?.lastMessage?.sendAt
-            ? new Date(existing.lastMessage.sendAt).getTime()
-            : existing?.created
-              ? new Date(existing.created).getTime()
-              : 0;
-          if (existingSendAt === newSendAt) {
-            updated[idx] = entry;
-          } else {
-            updated.splice(idx, 1);
-            updated.push(entry);
-          }
-        } else {
-          updated.push(entry);
-        }
-
-        return sortChatList(updated);
-      });
+      pendingTalkUpdatesRef.current.push(newMessage);
+      if (talkFlushTimerRef.current) return;
+      talkFlushTimerRef.current = setTimeout(() => {
+        talkFlushTimerRef.current = null;
+        const batch = pendingTalkUpdatesRef.current;
+        pendingTalkUpdatesRef.current = [];
+        setUserList((prev: any[]) =>
+          sortChatList(batch.reduce(applyTalkUpdate, prev)),
+        );
+      }, 50);
     },
     [setUserList],
+  );
+
+  useEffect(
+    () => () => {
+      if (talkFlushTimerRef.current) clearTimeout(talkFlushTimerRef.current);
+    },
+    [],
   );
 
   const sortChatList = (list: any[]) => {
@@ -697,6 +745,8 @@ export function ChatSidebar() {
       setIsSearch(false);
       setSearchInput("");
       setSearchResults([]);
+      // A chat takes the main area back from any open broadcast list.
+      useBroadcastStore.getState().closeListChat();
 
       setActiveChat({
         talkId: data.talkId || "",
@@ -824,32 +874,49 @@ export function ChatSidebar() {
           </span>
         </div>
         <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-          onClick={openEvents}
-          title="Events"
-        >
-          <CalendarDays className="h-[18px] w-[18px]" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-          onClick={() => setCreateGroupOpen(true)}
-          title="New group"
-        >
-          <svg
-            fill="currentColor"
-            width="24"
-            height="24"
-            viewBox="0 -64 640 640"
-            xmlns="http://www.w3.org/2000/svg"
+        <Hint label="Events">
+          <Button
+            aria-label="Events"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+            onClick={openEvents}
           >
-            <path d="M96 224c35.3 0 64-28.7 64-64s-28.7-64-64-64-64 28.7-64 64 28.7 64 64 64zm448 0c35.3 0 64-28.7 64-64s-28.7-64-64-64-64 28.7-64 64 28.7 64 64 64zm32 32h-64c-17.6 0-33.5 7.1-45.1 18.6 40.3 22.1 68.9 62 75.1 109.4h66c17.7 0 32-14.3 32-32v-32c0-35.3-28.7-64-64-64zm-256 0c61.9 0 112-50.1 112-112S381.9 32 320 32 208 82.1 208 144s50.1 112 112 112zm76.8 32h-8.3c-20.8 10-43.9 16-68.5 16s-47.6-6-68.5-16h-8.3C179.6 288 128 339.6 128 403.2V432c0 26.5 21.5 48 48 48h288c26.5 0 48-21.5 48-48v-28.8c0-63.6-51.6-115.2-115.2-115.2zm-223.7-13.4C161.5 263.1 145.6 256 128 256H64c-35.3 0-64 28.7-64 64v32c0 17.7 14.3 32 32 32h65.9c6.3-47.4 34.9-87.3 75.2-109.4z" />
-          </svg>
-        </Button>
+            <CalendarDays className="h-[18px] w-[18px]" />
+          </Button>
+        </Hint>
+        {BROADCAST_ENABLED && (
+          <Hint label="Broadcast lists">
+            <Button
+              aria-label="Broadcast lists"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+              onClick={openBroadcasts}
+            >
+              <Megaphone className="h-[18px] w-[18px]" />
+            </Button>
+          </Hint>
+        )}
+        <Hint label="New group">
+          <Button
+            aria-label="New group"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+            onClick={() => setCreateGroupOpen(true)}
+          >
+            <svg
+              fill="currentColor"
+              width="24"
+              height="24"
+              viewBox="0 -64 640 640"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M96 224c35.3 0 64-28.7 64-64s-28.7-64-64-64-64 28.7-64 64 28.7 64 64 64zm448 0c35.3 0 64-28.7 64-64s-28.7-64-64-64-64 28.7-64 64 28.7 64 64 64zm32 32h-64c-17.6 0-33.5 7.1-45.1 18.6 40.3 22.1 68.9 62 75.1 109.4h66c17.7 0 32-14.3 32-32v-32c0-35.3-28.7-64-64-64zm-256 0c61.9 0 112-50.1 112-112S381.9 32 320 32 208 82.1 208 144s50.1 112 112 112zm76.8 32h-8.3c-20.8 10-43.9 16-68.5 16s-47.6-6-68.5-16h-8.3C179.6 288 128 339.6 128 403.2V432c0 26.5 21.5 48 48 48h288c26.5 0 48-21.5 48-48v-28.8c0-63.6-51.6-115.2-115.2-115.2zm-223.7-13.4C161.5 263.1 145.6 256 128 256H64c-35.3 0-64 28.7-64 64v32c0 17.7 14.3 32 32 32h65.9c6.3-47.4 34.9-87.3 75.2-109.4z" />
+            </svg>
+          </Button>
+        </Hint>
         </div>
       </div>
 
@@ -886,7 +953,10 @@ export function ChatSidebar() {
       {/* ── Filter tabs ── */}
       {!isSearch && (
         <div className="flex gap-2 px-4 pb-2.5">
-          {(["all", "group", "unread"] as const).map((filter) => {
+          {(BROADCAST_ENABLED
+            ? (["all", "group", "unread", "broadcast"] as const)
+            : (["all", "group", "unread"] as const)
+          ).map((filter) => {
             const isActive = chatFilter === filter;
             const unreadCount = filter === "unread"
               ? userList.filter((u: any) => u.unreadCount > 0).length
@@ -902,6 +972,7 @@ export function ChatSidebar() {
                     : "border-border/50 bg-card/60 text-muted-foreground hover:bg-card",
                 )}
               >
+                {filter === "broadcast" && <Megaphone className="h-3 w-3" />}
                 {filter}
                 {filter === "unread" && unreadCount > 0 && (
                   <span
@@ -938,7 +1009,7 @@ export function ChatSidebar() {
                 >
                   <ChatListItem
                     data={data}
-                    isActive={!!data.talkId && data.talkId === talkIdState}
+                    isActive={!!data.talkId && data.talkId === highlightTalkId}
                     chatuserId={chatuserId}
                     onSelect={handleSelect}
                     onPin={handlePin}
@@ -959,6 +1030,8 @@ export function ChatSidebar() {
               </p>
             )}
           </div>
+        ) : chatFilter === "broadcast" ? (
+          <BroadcastSidebarList onOpenList={openListChat} />
         ) : filteredList.length === 0 ? (
           <div className="flex min-h-[calc(100vh-220px)] flex-col items-center justify-center px-8" style={{ animation: 'fadeUpIn 0.5s ease-out' }}>
             {/* ── Unread empty ── */}
@@ -1033,7 +1106,7 @@ export function ChatSidebar() {
                 title="Pinned"
                 items={pinnedItems}
                 defaultOpen={true}
-                talkIdState={talkIdState}
+                talkIdState={highlightTalkId}
                 chatuserId={chatuserId}
                 userDrafts={userDrafts}
                 onSelect={handleSelect}
@@ -1047,7 +1120,7 @@ export function ChatSidebar() {
               title="Recent"
               items={recentItems}
               defaultOpen={true}
-              talkIdState={talkIdState}
+              talkIdState={highlightTalkId}
               chatuserId={chatuserId}
               userDrafts={userDrafts}
               onSelect={handleSelect}
@@ -1081,14 +1154,16 @@ export function ChatSidebar() {
           {/* Settings dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-                title="Settings"
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
+              <Hint label="Settings">
+                <Button
+                  aria-label="Settings"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </Hint>
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
@@ -1301,7 +1376,7 @@ export function ChatSidebar() {
           })()}
 
           <Button
-            className="w-full rounded-xl font-semibold"
+            className="w-full rounded-xl font-semibold [.dark:not(.accent-black)_&]:text-white"
             disabled={!pendingAccent || pendingAccent === accentColor}
             onClick={() => {
               if (pendingAccent && pendingAccent !== accentColor) {
